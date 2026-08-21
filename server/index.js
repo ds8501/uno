@@ -9,12 +9,27 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import { WebSocketServer } from 'ws';
 import { Game, botChoose, bestColor, isWildValue, face } from '../js/uno.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const PORT = process.env.PORT || 8090;
+
+/**
+ * Best LAN address for this machine, so the host can copy a link that actually
+ * works for friends on the same wifi ("localhost" only works on this device).
+ */
+function lanAddress() {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family === 'IPv4' && !ni.internal) return ni.address;
+    }
+  }
+  return 'localhost';
+}
+const LAN = lanAddress();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -60,6 +75,8 @@ function lobbyState(room) {
   return {
     t: 'lobby',
     code: room.code,
+    shareBase: `http://${LAN}:${PORT}`,
+    lanHost: LAN,
     variant: room.variant,
     started: room.started,
     seats: room.seats.map(s => ({ name: s.name, bot: s.bot, connected: !!(s.ws && s.ws.readyState === 1) })),
@@ -137,6 +154,9 @@ function startGame(room) {
   }
   room.started = true;
   room.game = new Game(room.seats.length, 'online', room.variant);
+  // the engine's default naming is for local play ("You" / "Bot 1"); in a room
+  // the log is shared, so every line must name the actual player
+  room.game.playerName = i => (room.seats[i] ? room.seats[i].name : `Player ${i + 1}`);
   pushState(room, 'started');
   scheduleBots(room);
 }
@@ -252,6 +272,8 @@ wss.on('connection', ws => {
 });
 
 server.listen(PORT, () => {
-  console.log(`UNO server on http://localhost:${PORT}`);
-  console.log('Share the room link from the in-game lobby.');
+  console.log(`UNO server ready`);
+  console.log(`  this machine : http://localhost:${PORT}/game.html`);
+  console.log(`  same wifi    : http://${LAN}:${PORT}/game.html`);
+  console.log('Create a room in-game and share the link it shows.');
 });

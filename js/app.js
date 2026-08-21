@@ -1316,13 +1316,6 @@ refreshCoinHud();
 refreshVariantRow();
 applyTheme();
 
-// arriving from a shared link: prefill the code and join once a name is set
-const invite = new URLSearchParams(location.search).get('room');
-if (invite) {
-  openRoomFlow(invite.toUpperCase().slice(0, 4)).then(() => {
-    if (savedName()) el('joinBtn').click();     // returning player, just join
-  });
-}
 
 // ═══════════════════════════════════════════════════════════
 //  ONLINE ROOMS
@@ -1352,7 +1345,7 @@ async function openRoomFlow(prefillCode = '') {
   el('joinCode').value = prefillCode;
   showLobby('start');
   try { await Net.connect(); }
-  catch { lobbyError('Room server unreachable — start it with: npm start'); }
+  catch (e) { lobbyError(e.message); }
 }
 
 function myName() {
@@ -1364,8 +1357,10 @@ function myName() {
 function renderLobbyRoom(m) {
   roomCode = m.code; isHost = m.isHost; mySeat = m.you;
   el('roomCode').textContent = m.code;
-  const link = `${location.origin}${location.pathname}?room=${m.code}`;
-  el('roomLink').value = link;
+  // prefer the address the server reports: the page may have been opened from a
+  // different local origin, and "localhost" is useless to a friend on another device
+  const base = m.shareBase || `${location.protocol}//${Net.serverHost || location.host}`;
+  el('roomLink').value = `${base}/game.html?room=${m.code}`;
 
   const list = el('seatList');
   list.innerHTML = '';
@@ -1441,7 +1436,11 @@ async function beginOnlineGame(snap) {
 }
 
 // ── server events ──
-Net.on('lobby', m => { lobbySeats = Math.max(lobbySeats, m.seats.length); renderLobbyRoom(m); showLobby('room'); });
+Net.on('lobby', m => {
+  lobbyError('');
+  lobbySeats = Math.max(lobbySeats, m.seats.length);
+  renderLobbyRoom(m); showLobby('room');
+});
 Net.on('error', m => lobbyError(m.msg));
 Net.on('close', () => { if (isOnline()) el('hint').textContent = 'Disconnected from the room server.'; });
 
@@ -1484,15 +1483,17 @@ Net.on('ended', async m => { if (!isOnline()) return; adoptSnapshot(m.snapshot);
 
 // ── lobby controls ──
 el('createBtn').addEventListener('click', async () => {
+  if (roomCode) return;                      // already in a room
   lobbyError('');
-  try { await Net.connect(); } catch { return lobbyError('Room server unreachable — start it with: npm start'); }
+  try { await Net.connect(); } catch (e) { return lobbyError(e.message); }
   Net.createRoom(myName(), lobbyVariant, lobbySeats);
 });
 el('joinBtn').addEventListener('click', async () => {
+  if (roomCode) return;                      // already in a room
   const code = el('joinCode').value.trim().toUpperCase();
   if (code.length !== 4) return lobbyError('Enter the 4-character room code');
   lobbyError('');
-  try { await Net.connect(); } catch { return lobbyError('Room server unreachable — start it with: npm start'); }
+  try { await Net.connect(); } catch (e) { return lobbyError(e.message); }
   Net.joinRoom(code, myName());
 });
 el('startRoomBtn').addEventListener('click', () => Net.startRoom());
@@ -1502,7 +1503,9 @@ el('copyBtn').addEventListener('click', async () => {
   catch { el('roomLink').select(); el('copyBtn').textContent = 'Select + copy'; }
   setTimeout(() => { el('copyBtn').textContent = 'Copy'; }, 1600);
 });
-el('lobbyBack').addEventListener('click', () => { hideLobby(); Net.close(); menu.style.display = 'flex'; });
+el('lobbyBack').addEventListener('click', () => {
+  hideLobby(); Net.close(); roomCode = null; menu.style.display = 'flex';
+});
 el('leaveBtn').addEventListener('click', () => {
   Net.close(); roomCode = null; hideLobby();
   history.replaceState(null, '', location.pathname);
@@ -1620,3 +1623,15 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   fitCamera();
 });
+
+// ── shared-link bootstrap ──────────────────────────────────────────────
+// Must run last: openRoomFlow/lobbyError/savedName are const-declared above,
+// so calling this any earlier hits the temporal dead zone.
+{
+  const invite = new URLSearchParams(location.search).get('room');
+  if (invite) {
+    openRoomFlow(invite.toUpperCase().slice(0, 4)).then(() => {
+      if (savedName()) el('joinBtn').click();   // returning player: join straight away
+    });
+  }
+}
