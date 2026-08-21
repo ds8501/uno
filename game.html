@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UNO — Play</title>
+<style>
+  :root {
+    --red:    #e02216;
+    --yellow: #f5c400;
+    --blue:   #1a5dc8;
+    --green:  #1e8c45;
+    --dark:   #0e0e12;
+    --dark2:  #161620;
+    --card-bg:#1c1c28;
+    --text:   #f0eef8;
+    --muted:  #8e8ca8;
+    --radius: 18px;
+    --shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: var(--dark);
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    color: var(--text);
+  }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ── Overlays (menu / win) ── */
+  .overlay {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse 80% 70% at 50% 40%, #1a0d2e 0%, rgba(14,14,18,0.96) 60%);
+    overflow: hidden;
+  }
+  .overlay::before {
+    content: ''; position: absolute; top: -120px; right: 10%;
+    width: 480px; height: 480px;
+    background: radial-gradient(circle, rgba(224,34,22,0.20) 0%, transparent 65%);
+    animation: orb1 9s ease-in-out infinite alternate; pointer-events: none;
+  }
+  .overlay::after {
+    content: ''; position: absolute; bottom: -140px; left: 8%;
+    width: 460px; height: 460px;
+    background: radial-gradient(circle, rgba(26,93,200,0.20) 0%, transparent 65%);
+    animation: orb2 11s ease-in-out infinite alternate; pointer-events: none;
+  }
+  @keyframes orb1 { from { transform: translate(0,0) scale(1); } to { transform: translate(-30px,26px) scale(1.15); } }
+  @keyframes orb2 { from { transform: translate(0,0) scale(1); } to { transform: translate(24px,-30px) scale(1.2); } }
+
+  .panel {
+    position: relative; z-index: 2;
+    background: var(--card-bg);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: var(--radius);
+    padding: 40px 44px;
+    text-align: center;
+    box-shadow: var(--shadow);
+    min-width: 340px;
+    animation: fadeUp 0.5s ease both;
+  }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(18px);} to { opacity:1; transform:translateY(0);} }
+
+  /* ── Brand logo ── */
+  .brand {
+    display: inline-flex; align-items: center; gap: 12px;
+    font-size: 2.6rem; font-weight: 900; letter-spacing: -1px;
+    margin-bottom: 1.8rem;
+  }
+  .logo-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 52px; height: 52px; border-radius: 14px;
+    background: var(--red); color: #fff; font-size: 1.6rem; font-weight: 900;
+    box-shadow: 0 0 22px rgba(224,34,22,0.6); transform: rotate(-6deg);
+  }
+  .brand .accent { color: var(--yellow); }
+  #winScreen .brand { display: flex; justify-content: center; margin-bottom: 0.4rem; }
+
+  .lbl {
+    display: block;
+    font-size: 0.72rem; font-weight: 800; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--yellow);
+    margin: 20px 0 10px;
+  }
+
+  .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+  button {
+    cursor: pointer; border: none; border-radius: 50px;
+    padding: 11px 22px; font-size: 0.95rem; font-weight: 700;
+    background: rgba(255,255,255,0.07);
+    color: var(--text); border: 1px solid rgba(255,255,255,0.14);
+    transition: transform .12s, background .18s, box-shadow .18s, border-color .18s;
+  }
+  button:hover { background: rgba(255,255,255,0.13); transform: translateY(-2px); }
+  button:active { transform: scale(0.96); }
+  button.sel {
+    background: var(--red); border-color: transparent; color: #fff;
+    box-shadow: 0 0 22px rgba(224,34,22,0.5);
+  }
+  button.sel:hover { background: var(--red); }
+  #countRow button { min-width: 54px; }
+
+  button.primary {
+    background: var(--red); color: #fff; border: none;
+    padding: 15px 40px; font-size: 1.05rem; margin-top: 26px;
+    box-shadow: 0 0 30px rgba(224,34,22,0.5);
+  }
+  button.primary:hover { transform: translateY(-3px); box-shadow: 0 0 45px rgba(224,34,22,0.7); background: var(--red); }
+
+  /* ── HUD ── */
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 5;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 18px 22px; pointer-events: none;
+  }
+  #hud .box {
+    pointer-events: auto;
+    background: rgba(20,20,30,0.72); backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.10); border-radius: 14px;
+    padding: 12px 18px; box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+  }
+  #turnBanner { font-size: 1.05rem; font-weight: 800; letter-spacing: -0.2px; }
+  #turnBanner .dot {
+    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    margin-right: 9px; vertical-align: middle; box-shadow: 0 0 10px currentColor;
+  }
+  #log { max-width: 320px; font-size: 0.78rem; line-height: 1.65; color: var(--muted); max-height: 130px; overflow: hidden; }
+
+  #controls { position: fixed; bottom: 20px; left: 22px; z-index: 5; display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+  #controls button { min-width: 132px; }
+  #controls.hidden { display: none; }
+  #drawBtn { background: var(--yellow); color: #14140f; border-color: transparent; box-shadow: 0 0 22px rgba(245,196,0,0.4); }
+  #drawBtn:hover:not(:disabled) { background: var(--yellow); }
+  #drawBtn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+
+  /* ── Color picker ── */
+  #colorPick {
+    position: fixed; inset: 0; z-index: 20; display: none;
+    align-items: center; justify-content: center; background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+  }
+  #colorPick .panel { min-width: 0; }
+  #colorPick .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 6px; }
+  .swatch {
+    width: 96px; height: 96px; border-radius: 16px; cursor: pointer;
+    border: 3px solid rgba(255,255,255,0.15); transition: transform .12s, border-color .12s, box-shadow .12s;
+  }
+  .swatch:hover { transform: scale(1.06); border-color: #fff; box-shadow: 0 0 26px rgba(255,255,255,0.25); }
+
+  .hint {
+    position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%);
+    font-size: 0.82rem; color: var(--muted); z-index: 4;
+    background: rgba(20,20,30,0.7); backdrop-filter: blur(8px);
+    padding: 6px 16px; border-radius: 50px; border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  /* back-to-home link */
+  .home-link {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 11; font-size: 0.8rem; color: var(--muted); text-decoration: none;
+    opacity: 0.7; transition: opacity .2s;
+  }
+  .home-link:hover { opacity: 1; color: var(--text); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- Start menu -->
+<div class="overlay" id="menu">
+  <div class="panel">
+    <div class="brand">
+      <span class="logo-badge">U</span>
+      <span>UN<span class="accent">O</span></span>
+    </div>
+
+    <span class="lbl">Mode</span>
+    <div class="row" id="modeRow">
+      <button data-mode="ai" class="sel">You vs Bots</button>
+      <button data-mode="hotseat">Local Hotseat</button>
+    </div>
+
+    <span class="lbl">Players</span>
+    <div class="row" id="countRow">
+      <button data-count="2">2</button>
+      <button data-count="3" class="sel">3</button>
+      <button data-count="4">4</button>
+    </div>
+
+    <button class="primary" id="startBtn">Start Game</button>
+  </div>
+</div>
+
+<!-- Win screen -->
+<div class="overlay" id="winScreen" style="display:none;">
+  <div class="panel">
+    <div class="brand" style="font-size:2rem;">
+      <span class="logo-badge" style="width:44px;height:44px;font-size:1.3rem;">U</span>
+      <span id="winText">You win!</span>
+    </div>
+    <button class="primary" id="againBtn">Play Again</button>
+  </div>
+</div>
+
+<!-- HUD -->
+<a href="index.html" class="home-link" id="homeLink" style="display:none;">← Home</a>
+<div id="hud" style="display:none;">
+  <div class="box" id="turnBanner"></div>
+  <div class="box" id="log"></div>
+</div>
+
+<div id="controls" class="hidden">
+  <button id="drawBtn">Draw Card</button>
+  <button id="passBtn" style="display:none;">Pass</button>
+  <button id="menuBtn">Menu</button>
+</div>
+<div class="hint" id="hint"></div>
+
+<!-- Color picker -->
+<div id="colorPick">
+  <div class="panel">
+    <span class="lbl" style="margin-top:0;">Pick a color</span>
+    <div class="grid">
+      <div class="swatch" data-color="red" style="background:#e02216;"></div>
+      <div class="swatch" data-color="yellow" style="background:#f5c400;"></div>
+      <div class="swatch" data-color="green" style="background:#1e8c45;"></div>
+      <div class="swatch" data-color="blue" style="background:#1a5dc8;"></div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
