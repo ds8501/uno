@@ -128,14 +128,15 @@ function makeFeltTexture() {
   const S = 512;
   const cv = document.createElement('canvas'); cv.width = S; cv.height = S;
   const ctx = cv.getContext('2d');
-  ctx.fillStyle = '#111116'; ctx.fillRect(0,0,S,S);
+  ctx.fillStyle = '#24242f'; ctx.fillRect(0,0,S,S);
   const img = ctx.getImageData(0,0,S,S); const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
-    const n = (Math.random() - 0.5) * 16;
+    const n = (Math.random() - 0.5) * 26;
     d[i] += n; d[i+1] += n; d[i+2] += n;
   }
   ctx.putImageData(img, 0, 0);
   feltTex = new THREE.CanvasTexture(cv);
+  feltTex.colorSpace = THREE.SRGBColorSpace;
   feltTex.wrapS = feltTex.wrapT = THREE.RepeatWrapping;
   feltTex.repeat.set(4, 3);
   return feltTex;
@@ -182,8 +183,8 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#07070a');
-scene.fog = new THREE.Fog(0x07070a, 26, 52);
+scene.background = new THREE.Color('#0d0d15');
+scene.fog = new THREE.Fog(0x0d0d15, 28, 56);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 4, 60);
 const CAM_TARGET = new THREE.Vector3(0, 0, 0.3);
@@ -202,8 +203,9 @@ function fitCamera() {
 fitCamera();
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.34));
+scene.add(new THREE.HemisphereLight(0x8ea4ff, 0x241c2c, 0.3));
 
-const key = new THREE.DirectionalLight(0xffffff, 0.95);
+const key = new THREE.DirectionalLight(0xfff3e0, 1.05);
 key.position.set(1.5, 15, 5);
 key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048);
@@ -214,9 +216,18 @@ key.shadow.bias = -0.0006;
 key.shadow.radius = 3;
 scene.add(key);
 
-const fill = new THREE.DirectionalLight(0x93a8ff, 0.2); fill.position.set(-8, 6, -7); scene.add(fill);
-const glowRed = new THREE.PointLight(0xff3020, 0.5, 16); glowRed.position.set(0, 1.1, -5.0); scene.add(glowRed);
-const glowGrn = new THREE.PointLight(0x2bd94b, 0.5, 16); glowGrn.position.set(0, 1.1, 5.0); scene.add(glowGrn);
+const fill = new THREE.DirectionalLight(0x93a8ff, 0.38); fill.position.set(-8, 6, -7); scene.add(fill);
+
+// overhead lamp: warm pool on the felt that falls off across the rail
+const lamp = new THREE.SpotLight(0xffe7c0, 34, 22, 0.5, 0.95, 1.5);
+lamp.position.set(0.3, 10.5, 2.2);
+lamp.target.position.set(0, 0, 0.4);
+scene.add(lamp, lamp.target);
+
+const glowRed = new THREE.PointLight(0xff3020, 1.4, 16); glowRed.position.set(0, 1.1, -5.0); scene.add(glowRed);
+const glowGrn = new THREE.PointLight(0x2bd94b, 1.4, 16); glowGrn.position.set(0, 1.1, 5.0); scene.add(glowGrn);
+const glowBlu = new THREE.PointLight(0x2b7bff, 1.0, 16); glowBlu.position.set(-6.6, 1.1, 0); scene.add(glowBlu);
+const glowYel = new THREE.PointLight(0xffc400, 1.0, 16); glowYel.position.set( 6.6, 1.1, 0); scene.add(glowYel);
 
 // coloured spill on the dark surround, like the reference render
 function addSpill(colour, x, z, size, opacity) {
@@ -251,25 +262,53 @@ function holedShape(ow, oh, or_, iw, ih, ir) {
   return s;
 }
 
+// chip wells, punched clean through the rail + frame so the chips sit in a pocket.
+// RAIL_Y is the visible rail surface: the frame's bevelled top (depth + bevelThickness),
+// which sits above the `rail` plane.
+const RAIL_Y = 0.105;
+const WELL_R = 0.6, WELL_DEPTH = 0.22;
+// two wells per corner, spaced along the rail's corner arc so both clear its edge
+const wellAt = deg => {
+  const a = THREE.MathUtils.degToRad(deg), d = 1.68;
+  return [RAIL_W/2 - RAIL_R + Math.cos(a) * d, RAIL_D/2 - RAIL_R + Math.sin(a) * d];
+};
+const [WA_X, WA_Z] = wellAt(21), [WB_X, WB_Z] = wellAt(69);
+const CHIP_WELLS = [
+  [-WA_X, -WA_Z, 0xe02216], [-WB_X, -WB_Z, 0xe02216],
+  [ WA_X, -WA_Z, 0xf5c400], [ WB_X, -WB_Z, 0xf5c400],
+  [-WA_X,  WA_Z, 0x1a5dc8], [-WB_X,  WB_Z, 0x1a5dc8],
+  [ WA_X,  WA_Z, 0xf5c400], [ WB_X,  WB_Z, 0xf5c400],
+];
+function punchWells(shape) {
+  for (const [x, z] of CHIP_WELLS) {
+    const p = new THREE.Path();
+    p.absarc(x, -z, WELL_R, 0, Math.PI * 2, true);
+    shape.holes.push(p);
+  }
+  return shape;
+}
+
 const tableGroup = new THREE.Group(); scene.add(tableGroup);
 const neonBars = {}, seatArrows = {}, seatRacks = {};
 
 function buildTable() {
   // ── outer frame: wide gunmetal rail, bevelled ──
-  const frameGeo = new THREE.ExtrudeGeometry(roundedShape(FRAME_W, FRAME_D, FRAME_R), {
+  const frameGeo = new THREE.ExtrudeGeometry(punchWells(
+    holedShape(FRAME_W, FRAME_D, FRAME_R, FELT_W + 0.2, FELT_D + 0.2, FELT_R + 0.1)), {
     depth: 0.72, bevelEnabled: true, bevelSize: 0.12, bevelThickness: 0.1, bevelSegments: 4, curveSegments: 28,
   });
   const frame = new THREE.Mesh(frameGeo, new THREE.MeshStandardMaterial({
-    color: 0x3c3c45, roughness: 0.52, metalness: 0.55 }));
+    color: 0x3f3f4b, roughness: 0.46, metalness: 0.6 }));
   frame.rotation.x = -Math.PI/2; frame.position.y = -0.72;
   frame.receiveShadow = true; tableGroup.add(frame);
 
   // rail top surface (lighter, catches the light)
   const rail = new THREE.Mesh(
-    new THREE.ShapeGeometry(roundedShape(RAIL_W, RAIL_D, RAIL_R), 28),
-    new THREE.MeshStandardMaterial({ color: 0x4a4a55, roughness: 0.45, metalness: 0.6 })
+    new THREE.ShapeGeometry(punchWells(
+      holedShape(RAIL_W, RAIL_D, RAIL_R, FELT_W + 0.2, FELT_D + 0.2, FELT_R + 0.1)), 28),
+    new THREE.MeshStandardMaterial({ color: 0x50505f, roughness: 0.38, metalness: 0.66 })
   );
-  rail.rotation.x = -Math.PI/2; rail.position.y = 0.012;
+  rail.rotation.x = -Math.PI/2; rail.position.y = RAIL_Y;
   rail.receiveShadow = true; tableGroup.add(rail);
 
   // thin wooden trim just inside the rail
@@ -277,7 +316,7 @@ function buildTable() {
     holedShape(FELT_W + 3.0, FELT_D + 3.0, FELT_R + 1.5, FELT_W + 2.1, FELT_D + 2.1, FELT_R + 1.05),
     { depth: 0.1, bevelEnabled: false, curveSegments: 28 });
   const wood = new THREE.Mesh(woodGeo, new THREE.MeshStandardMaterial({
-    color: 0x5c3418, roughness: 0.5, metalness: 0.2 }));
+    color: 0x7a4820, roughness: 0.42, metalness: 0.25 }));
   wood.rotation.x = -Math.PI/2; wood.position.y = 0.03; tableGroup.add(wood);
 
   // dark bezel ringing the felt
@@ -285,8 +324,8 @@ function buildTable() {
     holedShape(FELT_W + 0.6, FELT_D + 0.6, FELT_R + 0.3, FELT_W, FELT_D, FELT_R),
     { depth: 0.16, bevelEnabled: false, curveSegments: 28 });
   const bezel = new THREE.Mesh(bezelGeo, new THREE.MeshStandardMaterial({
-    color: 0x15151a, roughness: 0.7, metalness: 0.4 }));
-  bezel.rotation.x = -Math.PI/2; bezel.position.y = 0.052; tableGroup.add(bezel);
+    color: 0x23232e, roughness: 0.55, metalness: 0.5 }));
+  bezel.rotation.x = -Math.PI/2; bezel.position.y = 0.02; tableGroup.add(bezel);
 
   // black felt
   const felt = new THREE.Mesh(
@@ -296,6 +335,14 @@ function buildTable() {
   felt.rotation.x = -Math.PI/2; felt.position.y = 0.008;
   felt.receiveShadow = true; tableGroup.add(felt);
 
+  // soft pool of lamp light across the middle of the felt
+  const pool = new THREE.Mesh(
+    new THREE.PlaneGeometry(FELT_W * 1.05, FELT_D * 1.25),
+    new THREE.MeshBasicMaterial({ map: makeGlowTexture(), color: 0xffe2b0, transparent: true,
+      opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  pool.rotation.x = -Math.PI/2; pool.position.set(0, 0.014, 0.25); tableGroup.add(pool);
+
   // ── neon strips, inset into the rail ──
   const strip = (seat, len, horizontal, x, z) => {
     const g = new THREE.Group();
@@ -304,12 +351,12 @@ function buildTable() {
       new THREE.MeshBasicMaterial({ color: NEON[seat] }));
     g.add(core);
     const halo = new THREE.Mesh(
-      new THREE.PlaneGeometry(horizontal ? len * 1.05 : 1.5, horizontal ? 1.5 : len * 1.05),
-      new THREE.MeshBasicMaterial({ color: NEON[seat], transparent: true, opacity: 0.24,
+      new THREE.PlaneGeometry(horizontal ? len * 1.25 : 2.4, horizontal ? 2.4 : len * 1.25),
+      new THREE.MeshBasicMaterial({ map: makeGlowTexture(), color: NEON[seat], transparent: true, opacity: 0.3,
         blending: THREE.AdditiveBlending, depthWrite: false })
     );
     halo.rotation.x = -Math.PI/2; halo.position.y = -0.02; g.add(halo);
-    g.position.set(x, 0.075, z);
+    g.position.set(x, RAIL_Y + 0.025, z);
     g.userData = { core, halo };
     tableGroup.add(g); neonBars[seat] = g;
   };
@@ -319,7 +366,7 @@ function buildTable() {
   strip('right',  4.8, false,  FELT_W/2 + 0.6, 0);
 
   // ── angled card racks + turn arrows ──
-  const rackMat = new THREE.MeshStandardMaterial({ color: 0x1c1c22, roughness: 0.6, metalness: 0.45 });
+  const rackMat = new THREE.MeshStandardMaterial({ color: 0x2c2c38, roughness: 0.5, metalness: 0.5 });
   const rack = (seat, len, horizontal, x, z, tiltAxis, tiltSign) => {
     const w = horizontal ? len : 0.8, d = horizontal ? 0.8 : len;
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.14, d), rackMat);
@@ -344,27 +391,33 @@ function buildTable() {
   rack('left',   4.4, false, -FELT_W/2 + 0.34, 0, 'z',  1);
   rack('right',  4.4, false,  FELT_W/2 - 0.34, 0, 'z', -1);
 
-  // ── recessed chip wells with stacked chips ──
+  // ── segment seams: joints splitting the rail into 4 panels + 4 corner pads ──
+  const seamMat = new THREE.MeshStandardMaterial({ color: 0x121218, roughness: 0.85, metalness: 0.35 });
+  const seam = (x, z, alongX, len) => {
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(alongX ? len : 0.07, 0.02, alongX ? 0.07 : len), seamMat);
+    m.position.set(x, RAIL_Y + 0.002, z); tableGroup.add(m);
+  };
+  for (const sx of [-5.2, 5.2]) { seam(sx, 4.85, false, 2.1); seam(sx, -4.85, false, 2.1); }
+  for (const sz of [-3.0, 3.0]) { seam(7.22, sz, true, 2.35); seam(-7.22, sz, true, 2.35); }
+
+  // ── chip wells: pockets sunk through the rail, chips resting on the floor ──
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x0b0b10, roughness: 0.9, metalness: 0.25 });
   const chipStack = (x, z, col) => {
-    const well = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.46, 0.46, 0.08, 26),
-      new THREE.MeshStandardMaterial({ color: 0x1a1a1f, roughness: 0.8, metalness: 0.3 })
-    );
-    well.position.set(x, 0.03, z); tableGroup.add(well);
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(WELL_R + 0.01, 26), floorMat);
+    floor.rotation.x = -Math.PI/2;
+    floor.position.set(x, RAIL_Y - WELL_DEPTH, z);
+    floor.receiveShadow = true; tableGroup.add(floor);
     for (let i = 0; i < 5; i++) {
       const c = new THREE.Mesh(
         new THREE.CylinderGeometry(0.33, 0.33, 0.065, 24),
         new THREE.MeshStandardMaterial({ color: col, roughness: 0.35, metalness: 0.55 })
       );
-      c.position.set(x, 0.08 + i * 0.066, z);
+      c.position.set(x, RAIL_Y - WELL_DEPTH + 0.04 + i * 0.066, z);
       c.castShadow = true; tableGroup.add(c);
     }
   };
-  const cx = FELT_W/2 + 1.78, cz = FELT_D/2 + 1.72;
-  chipStack(-cx, -cz, 0xe02216); chipStack(-cx + 0.78, -cz, 0xe02216);
-  chipStack( cx, -cz, 0xf5c400); chipStack( cx - 0.78, -cz, 0xf5c400);
-  chipStack(-cx,  cz, 0x1a5dc8); chipStack(-cx + 0.78,  cz, 0x1a5dc8);
-  chipStack( cx,  cz, 0xf5c400); chipStack( cx - 0.78,  cz, 0xf5c400);
+  CHIP_WELLS.forEach(([x, z, col]) => chipStack(x, z, col));
 }
 buildTable();
 
@@ -374,7 +427,7 @@ const unoBtn = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ map: makeUnoButtonTexture(), transparent: true })
 );
 unoBtn.rotation.x = -Math.PI/2;
-unoBtn.position.set(FELT_W/2 - 1.0, 0.2, FELT_D/2 - 1.15);
+unoBtn.position.set(FELT_W/2 - 1.0, 0.06, FELT_D/2 - 1.15);
 unoBtn.userData = { type: 'uno' };
 scene.add(unoBtn);
 const unoGlow = new THREE.Mesh(
@@ -382,8 +435,18 @@ const unoGlow = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ color: 0xe02216, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })
 );
 unoGlow.rotation.x = -Math.PI/2;
-unoGlow.position.copy(unoBtn.position).setY(0.17);
+unoGlow.position.copy(unoBtn.position).setY(0.04);
 scene.add(unoGlow);
+
+// wash under the discard pile, tinted with the colour in play
+const discGlow = new THREE.Mesh(
+  new THREE.PlaneGeometry(3.6, 3.6),
+  new THREE.MeshBasicMaterial({ map: makeGlowTexture(), color: 0xffffff, transparent: true,
+    opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false })
+);
+discGlow.rotation.x = -Math.PI/2;
+discGlow.position.set(DISC_POS.x, 0.026, DISC_POS.z);
+scene.add(discGlow);
 
 // ═══════════════════════════════════════════════════════════
 //  CARD MESHES
@@ -462,6 +525,170 @@ function stepAnims(dt) {
   }
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ═══════════════════════════════════════════════════════════
+//  POWER-CARD EFFECTS
+// ═══════════════════════════════════════════════════════════
+const SEAT_POS = {
+  bottom: [0, FELT_D/2 + 1.25],
+  top:    [0, -FELT_D/2 - 1.25],
+  left:   [-FELT_W/2 - 1.1, 0],
+  right:  [ FELT_W/2 + 1.1, 0],
+};
+const GLOW_INT = { red: 0xff4a30, yellow: 0xffd42a, green: 0x2fd85f, blue: 0x3b86ff, wild: 0xf2f2ff };
+const GLOW_CSS = { red: '#ff6a52', yellow: '#ffdc4a', green: '#4ee07a', blue: '#5c9bff', wild: '#ffffff' };
+const POWER_VALUES = new Set(['skip', 'reverse', 'draw2', 'wild', 'wild4']);
+
+const fx = [];
+function spawnFx(mesh, dur, update, disposeMap = false) {
+  if (mesh) scene.add(mesh);
+  fx.push({ mesh, dur, t: 0, update, disposeMap });
+}
+function stepFx(dt) {
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const f = fx[i];
+    f.t += dt;
+    const k = Math.min(1, f.t / f.dur);
+    f.update(k, f.mesh);
+    if (k < 1) continue;
+    if (f.mesh) {
+      scene.remove(f.mesh);
+      if (f.disposeMap) f.mesh.material.map.dispose();
+      f.mesh.material.dispose();
+    }
+    fx.splice(i, 1);
+  }
+}
+
+function makeFxSprite(text, css) {
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 168;
+  const ctx = cv.getContext('2d');
+  ctx.font = "900 104px 'Segoe UI', system-ui, sans-serif";
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round'; ctx.lineWidth = 18;
+  ctx.strokeStyle = 'rgba(8,8,12,0.9)'; ctx.strokeText(text, 256, 88);
+  ctx.fillStyle = css; ctx.fillText(text, 256, 88);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Sprite(new THREE.SpriteMaterial({
+    map: t, transparent: true, depthTest: false, depthWrite: false }));
+}
+
+// Shout a word above a seat, rising and fading.
+function popText(text, x, z, css) {
+  const sp = makeFxSprite(text, css);
+  sp.position.set(x, 1.4, z);
+  spawnFx(sp, 1.05, (k, o) => {
+    const pop = easeOutCubic(Math.min(1, k * 4));
+    o.scale.set(2.8 * (0.55 + 0.45 * pop), 0.92 * (0.55 + 0.45 * pop), 1);
+    o.position.y = 1.4 + k * 0.8;
+    o.material.opacity = k < 0.55 ? 1 : 1 - (k - 0.55) / 0.45;
+  }, true);
+}
+
+// Expanding ring plus a soft flash, flat on the table.
+function ringBurst(x, z, colour, { r1 = 3.0, dur = 0.7, y = 0.3, soft = 0.7 } = {}) {
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.93, 1.0, 48),
+    new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.9, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+  ring.rotation.x = -Math.PI/2; ring.position.set(x, y, z);
+  spawnFx(ring, dur, (k, o) => {
+    const sc = 0.35 + (r1 - 0.35) * easeOutCubic(k);
+    o.scale.set(sc, sc, 1);
+    o.material.opacity = 0.9 * Math.pow(1 - k, 1.4);
+  });
+  const flash = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ map: makeGlowTexture(), color: colour, transparent: true, opacity: soft,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+  flash.rotation.x = -Math.PI/2; flash.position.set(x, y - 0.03, z);
+  spawnFx(flash, dur * 0.85, (k, o) => {
+    const sc = 1.4 + r1 * easeOutCubic(k);
+    o.scale.set(sc, sc, 1);
+    o.material.opacity = soft * (1 - k);
+  });
+}
+
+// Rattle a seat's card rack.
+function shakeSeat(seat) {
+  const m = seatRacks[seat];
+  if (!m || !m.visible) return;
+  const bx = m.position.x, bz = m.position.z;
+  const alongX = seat === 'top' || seat === 'bottom';
+  spawnFx(null, 0.5, k => {
+    const d = Math.sin(k * Math.PI * 7) * 0.085 * (1 - k);
+    if (alongX) m.position.x = bx + d; else m.position.z = bz + d;
+    if (k >= 1) m.position.set(bx, m.position.y, bz);
+  });
+}
+
+// Sweeping arc that spins the way play now flows.
+function reverseSwirl(colour) {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.2, 0.06, 8, 72, Math.PI * 1.4),
+    new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false }));
+  ring.rotation.x = -Math.PI/2; ring.position.set(0, 0.34, 0.2);
+  spawnFx(ring, 0.95, (k, o) => {
+    o.rotation.z = -game.dir * k * Math.PI * 2.4;
+    const sc = 0.65 + 0.5 * easeOutCubic(k);
+    o.scale.set(sc, sc, sc);
+    o.material.opacity = 0.95 * Math.pow(1 - k, 1.2);
+  });
+  for (const seat of Object.keys(seatArrows)) {
+    const a = seatArrows[seat];
+    if (a && a.visible) animate3(a, { rz: a.rotation.z + Math.PI * 2 }, { dur: 0.8, ease: easeInOutCubic });
+  }
+}
+
+// Rainbow pulse out of the pile, one ring per colour.
+function colourFan() {
+  const order = [0xff4a30, 0xffd42a, 0x2fd85f, 0x3b86ff];
+  order.forEach((c, i) => setTimeout(
+    () => ringBurst(DISC_POS.x, DISC_POS.z, c, { r1: 2.4 + i * 0.4, dur: 0.7, soft: 0.3 }), i * 95));
+}
+
+// Riffle the discard wash through the four colours, then settle on the chosen one.
+function colourCycle(finalInt) {
+  const order = [0xff4a30, 0xffd42a, 0x2fd85f, 0x3b86ff];
+  spawnFx(null, 1.0, k => {
+    discGlow.material.color.setHex(k < 0.72 ? order[Math.floor(k * 14) % 4] : finalInt);
+    discGlow.material.opacity = 0.4 + 0.45 * Math.pow(1 - k, 1.5);
+  });
+}
+
+// Fire the effect that matches the card just played.
+function powerFx(effect) {
+  const c = effect.card;
+  const int = GLOW_INT[c.color], css = GLOW_CSS[c.color];
+  const at = p => SEAT_POS[relSeatOf(p)];
+  switch (c.value) {
+    case 'skip': {
+      if (effect.skipped == null) break;
+      const [x, z] = at(effect.skipped);
+      popText('Skipped!', x, z, css);
+      ringBurst(x, z, int, { r1: 2.6 });
+      shakeSeat(relSeatOf(effect.skipped));
+      break;
+    }
+    case 'reverse':
+      popText('Reverse!', 0, 1.6, css);
+      reverseSwirl(int);
+      break;
+    case 'draw2':
+    case 'wild4': {
+      if (effect.drew == null) break;
+      const [x, z] = at(effect.drew);
+      popText(c.value === 'draw2' ? '+2' : '+4', x, z, css);
+      ringBurst(x, z, int, { r1: 3.0, soft: 0.85 });
+      shakeSeat(relSeatOf(effect.drew));
+      if (c.value === 'wild4') { colourCycle(GLOW_INT[game.activeColor]); colourFan(); }
+      break;
+    }
+    case 'wild':
+      popText('Wild', DISC_POS.x, DISC_POS.z + 1.2, '#ffffff');
+      colourCycle(GLOW_INT[game.activeColor]);
+      colourFan();
+      break;
+  }
+}
 
 // ═══════════════════════════════════════════════════════════
 //  GAME STATE
@@ -563,14 +790,27 @@ function markPlayable() {
   });
 }
 
-function placeDiscard(mesh, { fromHand = true } = {}) {
+const DISC_LAYERS = 8, DISC_STEP = 0.014;
+const discardY = i => 0.085 + i * DISC_STEP;
+
+function placeDiscard(mesh, { fromHand = true, spins = 0, onLand = null } = {}) {
   const spin = (discardMeshes.length % 4) * 0.16 - 0.24;
   discardMeshes.push(mesh);
+  // Trim first, then lay the pile out by index. Keying height off the array
+  // length instead meant every card past the cap landed at the same y, so a
+  // coplanar older card could win the depth test and keep showing on top.
+  // Cards still in flight are retargeted rather than moved, or their tween
+  // would drag them straight back to the old height.
+  while (discardMeshes.length > DISC_LAYERS) disposeCard(discardMeshes.shift());
+  discardMeshes.forEach((m, i) => {
+    if (m === mesh) return;
+    const flight = anims.find(a => a.obj === m);
+    if (flight) flight.to.py = discardY(i); else m.position.y = discardY(i);
+  });
   animate3(mesh, {
-    px: DISC_POS.x, py: 0.085 + discardMeshes.length * 0.014, pz: DISC_POS.z,
-    rx: -Math.PI/2, ry: spin, s: 1,
-  }, { dur: fromHand ? 0.46 : 0.4, arc: 1.15, ease: easeInOutCubic });
-  while (discardMeshes.length > 8) disposeCard(discardMeshes.shift());
+    px: DISC_POS.x, py: discardY(discardMeshes.length - 1), pz: DISC_POS.z,
+    rx: -Math.PI/2, ry: spin + spins * Math.PI * 2, s: 1,
+  }, { dur: fromHand ? 0.46 : 0.4, arc: 1.15, ease: easeInOutCubic, onDone: onLand });
 }
 
 function refreshLabels() {
@@ -579,16 +819,10 @@ function refreshLabels() {
     c.material.map.dispose(); c.material.dispose();
   }
   if (!game) return;
-  const LBL = {
-    bottom: [0, 0.5, FELT_D/2 + 1.25],
-    top:    [0, 0.5, -FELT_D/2 - 1.25],
-    left:   [-FELT_W/2 - 1.1, 0.5, 0],
-    right:  [ FELT_W/2 + 1.1, 0.5, 0],
-  };
   for (let p = 0; p < game.numPlayers; p++) {
-    const seat = relSeatOf(p);
+    const [x, z] = SEAT_POS[relSeatOf(p)];
     const sp = makeLabelSprite(`${game.playerName(p)}  ·  ${game.hands[p].length}`);
-    sp.position.set(...LBL[seat]);
+    sp.position.set(x, 0.5, z);
     labelsGroup.add(sp);
   }
 }
@@ -610,13 +844,16 @@ function refreshSeatGlow() {
     const on = seat === active;
     const g = neonBars[seat];
     if (!g) continue;
-    g.userData.halo.material.opacity = on ? 0.5 : 0.2;
+    g.userData.halo.material.opacity = on ? 0.62 : 0.26;
     g.userData.core.material.color.setHex(NEON[seat]);
     g.userData.core.scale.y = on ? 1.5 : 1;
     if (seatArrows[seat]) seatArrows[seat].visible = on;
   }
-  glowRed.intensity = active === 'top' ? 1.0 : 0.35;
-  glowGrn.intensity = active === 'bottom' ? 1.0 : 0.35;
+  glowRed.intensity = active === 'top' ? 2.4 : 0.9;
+  glowGrn.intensity = active === 'bottom' ? 2.4 : 0.9;
+  glowBlu.intensity = active === 'left' ? 2.0 : 0.7;
+  glowYel.intensity = active === 'right' ? 2.0 : 0.7;
+  discGlow.material.color.setHex(GLOW_INT[game.activeColor] || 0xffffff);
   // UNO button glows when the viewing player is down to one card
   const one = game.hands[viewPlayer()].length === 1;
   unoGlow.material.opacity = one ? 0.4 : 0;
@@ -669,11 +906,22 @@ async function applyPlay(cardId, color) {
   const effect = game.playCard(cardId, color);
   if (!effect) { busy = false; inputLocked = false; markPlayable(); return; }
 
-  if (mesh) { cardMeshes.delete(cardId); placeDiscard(mesh); }
+  const power = POWER_VALUES.has(effect.card.value);
+  if (mesh) {
+    cardMeshes.delete(cardId);
+    placeDiscard(mesh, {
+      spins: power ? 2 : 0,
+      onLand: () => {
+        ringBurst(DISC_POS.x, DISC_POS.z, GLOW_INT[effect.card.color],
+          power ? { r1: 2.2, dur: 0.7 } : { r1: 1.3, dur: 0.45, soft: 0.35 });
+        if (power) powerFx(effect);
+      },
+    });
+  }
   refreshLabels(); updateHUD();
-  await sleep(300);
+  await sleep(power ? 460 : 300);
   syncHands({ stagger: 0.09 });          // penalty draws fly in
-  await sleep(effect.drewCount ? 520 : 260);
+  await sleep(effect.drewCount ? 620 : power ? 420 : 260);
   await afterMove();
 }
 
@@ -835,6 +1083,8 @@ function clearBoard() {
   cardMeshes.forEach(m => disposeCard(m)); cardMeshes.clear();
   discardMeshes.forEach(m => disposeCard(m)); discardMeshes = [];
   anims.length = 0;
+  fx.forEach(f => { if (f.mesh) { scene.remove(f.mesh); f.mesh.material.dispose(); } });
+  fx.length = 0;
   while (labelsGroup.children.length) {
     const c = labelsGroup.children[0]; labelsGroup.remove(c);
     c.material.map.dispose(); c.material.dispose();
@@ -879,11 +1129,12 @@ function tick() {
   const dt = Math.min((now - lastTick) / 1000, 0.05);
   lastTick = now;
   stepAnims(dt);
+  stepFx(dt);
 
   // gentle neon breathing on the active seat
   if (game) {
     const active = relSeatOf(game.current);
-    if (neonBars[active]) neonBars[active].userData.halo.material.opacity = 0.34 + Math.sin(now / 380) * 0.09;
+    if (neonBars[active]) neonBars[active].userData.halo.material.opacity = 0.5 + Math.sin(now / 380) * 0.12;
     const arrow = seatArrows[active];
     if (arrow) arrow.position.y = 0.2 + Math.sin(now / 300) * 0.05;
   }
@@ -916,3 +1167,5 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   fitCamera();
 });
+
+
