@@ -88,3 +88,33 @@ export const startRoom  = ()                     => send({ t: 'start' });
 export const playCard   = (cardId, color)        => send({ t: 'play', cardId, color });
 export const drawCard   = ()                     => send({ t: 'draw' });
 export const passTurn   = ()                     => send({ t: 'pass' });
+
+/**
+ * Cheap availability check for the menu: open a socket, note whether it
+ * connected, close it again. Used to show "Play with Friends" as unavailable on
+ * hosts that cannot run the room server (e.g. Vercel) instead of letting the
+ * button fail only after a click.
+ */
+export function probe(timeoutMs = 2500) {
+  const tried = candidates();
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return new Promise(resolve => {
+    let i = 0;
+    const tryNext = () => {
+      if (i >= tried.length) { resolve(false); return; }
+      const sock = new WebSocket(`${proto}//${tried[i++]}`);
+      let settled = false;
+      const finish = ok => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        try { sock.close(); } catch {}
+        ok ? resolve(true) : tryNext();
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      sock.addEventListener('open', () => finish(true));
+      sock.addEventListener('error', () => finish(false));
+      sock.addEventListener('close', () => finish(false));
+    };
+    tryNext();
+  });
+}

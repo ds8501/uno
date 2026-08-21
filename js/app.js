@@ -1303,6 +1303,7 @@ function refreshVariantRow() {
   }
 }
 el('modeRow').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+  // even when flagged unavailable, open the flow so the lobby can explain why
   if (b.dataset.mode === 'online') { openRoomFlow(); return; }
   el('modeRow').querySelectorAll('button').forEach(x => x.classList.remove('sel'));
   b.classList.add('sel'); selMode = b.dataset.mode;
@@ -1632,6 +1633,22 @@ window.addEventListener('resize', () => {
   if (invite) {
     openRoomFlow(invite.toUpperCase().slice(0, 4)).then(() => {
       if (savedName()) el('joinBtn').click();   // returning player: join straight away
+    });
+  }
+}
+
+// ── multiplayer availability ───────────────────────────────────────────
+// No room server on this host (Vercel and other static hosts cannot run one),
+// so flag the button up front rather than after a click.
+{
+  const btn = [...el('modeRow').querySelectorAll('button')].find(b => b.dataset.mode === 'online');
+  if (btn) {
+    Net.probe().then(ok => {
+      if (ok) return;
+      btn.classList.add('locked');
+      btn.textContent = 'Play with Friends 🔒';
+      btn.title = 'No room server on this host — run it locally with npm start, ' +
+                  'or deploy to a WebSocket host (Render, Railway, Fly).';
     });
   }
 }

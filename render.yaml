@@ -1,0 +1,13 @@
+# Render blueprint. Render supports long-lived WebSockets, so the room server
+# and the static client run as one service on one port.
+services:
+  - type: web
+    name: uno-online
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
