@@ -165,6 +165,29 @@
     opacity: 0.7; transition: opacity .2s;
   }
   .home-link:hover { opacity: 1; color: var(--text); }
+
+  /* ── coins ── */
+  .coin-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(245,196,0,0.12); border: 1px solid rgba(245,196,0,0.32);
+    color: var(--yellow); font-weight: 800; font-size: 0.9rem;
+    padding: 7px 15px; border-radius: 50px; text-decoration: none;
+  }
+  .coin-chip:hover { background: rgba(245,196,0,0.2); }
+  #menuWallet { position: absolute; top: 18px; right: 18px; z-index: 12; display: flex; gap: 10px; }
+  #menuWallet .shop { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.16); color: var(--text); }
+  #gameWallet { position: fixed; top: 74px; right: 22px; z-index: 6; }
+
+  #variantRow button.locked { opacity: 0.62; }
+  #variantRow button.locked:hover { opacity: 0.85; }
+  #variantRow { gap: 8px; }
+  #variantRow button { font-size: 0.85rem; padding: 10px 16px; }
+
+  #winReward {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    margin-top: 4px; color: var(--yellow); font-weight: 800; font-size: 1.15rem;
+  }
+  #winReward .sub { color: var(--muted); font-weight: 600; font-size: 0.78rem; }
 </style>
 </head>
 <body>
@@ -172,11 +195,18 @@
 
 <!-- Start menu -->
 <div class="overlay" id="menu">
+  <div id="menuWallet">
+    <span class="coin-chip">🪙 <span id="coinCount">0</span></span>
+    <a class="coin-chip shop" href="store.html">Store</a>
+  </div>
   <div class="panel">
     <div class="brand">
       <span class="logo-badge">U</span>
       <span>UN<span class="accent">O</span></span>
     </div>
+
+    <span class="lbl">Game</span>
+    <div class="row" id="variantRow"></div>
 
     <span class="lbl">Mode</span>
     <div class="row" id="modeRow">
@@ -202,12 +232,15 @@
       <span class="logo-badge" style="width:44px;height:44px;font-size:1.3rem;">U</span>
       <span id="winText">You win!</span>
     </div>
+    <div id="winReward"></div>
     <button class="primary" id="againBtn">Play Again</button>
+    <div style="margin-top:14px;"><a class="coin-chip shop" href="store.html">Spend coins</a></div>
   </div>
 </div>
 
 <!-- HUD -->
 <a href="index.html" class="home-link" id="homeLink" style="display:none;">← Home</a>
+<span class="coin-chip" id="gameWallet" style="display:none;">🪙 <span id="coinCount2">0</span></span>
 <div id="hud" style="display:none;">
   <div class="box" id="turnBanner"></div>
   <div class="box" id="log"></div>

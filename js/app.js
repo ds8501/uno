@@ -1,11 +1,16 @@
 import * as THREE from 'three';
-import { Game, botChoose, canPlay, COLORS } from './uno.js';
+import { Game, botChoose, face, bestColor, isWildValue, ELIMINATE_AT } from './uno.js';
+import * as Profile from './profile.js';
 
 // ═══════════════════════════════════════════════════════════
 //  PALETTE
 // ═══════════════════════════════════════════════════════════
-const HEX = { red: '#e02216', yellow: '#f5c400', green: '#1e8c45', blue: '#1a5dc8', wild: '#17171f' };
-const DOT = { red: '#e02216', yellow: '#f5c400', green: '#1e8c45', blue: '#1a5dc8', wild: '#888' };
+const HEX = {
+  red: '#e02216', yellow: '#f5c400', green: '#1e8c45', blue: '#1a5dc8',
+  pink: '#d81b7a', teal: '#0d9c9c', orange: '#e06c00', purple: '#6f38c9',
+  wild: '#17171f',
+};
+const DOT = { ...HEX, wild: '#888' };
 const NEON = { bottom: 0x2bd94b, top: 0xff2a1a, left: 0x2b7bff, right: 0xffc400 };
 
 // table metrics
@@ -23,7 +28,11 @@ const DISC_POS = new THREE.Vector3(0.82, 0.16, 0);
 //  CANVAS TEXTURES
 // ═══════════════════════════════════════════════════════════
 const faceCache = new Map();
-let backTex = null, unoTex = null, feltTex = null;
+let unoTex = null;
+
+// live profile (wallet + equipped cosmetics)
+let profile = Profile.load();
+let activeSkin = profile.activeSkin;
 
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -34,11 +43,18 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
-const symbolFor = v => v === 'skip' ? '⊘' : v === 'reverse' ? '⇄'
-  : v === 'draw2' ? '+2' : v === 'wild' ? 'W' : v === 'wild4' ? '+4' : v;
+const SYMBOL = {
+  skip: '⊘', reverse: '⇄', flip: '⇅',
+  draw1: '+1', draw2: '+2', draw5: '+5', draw6: '+6', draw10: '+10',
+  skipall: '⊘ALL', revdraw4: '⇄+4', discardall: 'DUMP',
+  wild: 'W', wild2: '+2', wild4: '+4', wild6: '+6', wild10: '+10', wildcolor: 'W?',
+};
+const symbolFor = v => SYMBOL[v] ?? v;
+// long labels need to shrink or they overflow the card
+const symFont = len => (len <= 1 ? 184 : len === 2 ? 116 : len === 3 ? 84 : 62);
 
-function makeFaceTexture(color, value) {
-  const key = color + ':' + value;
+function makeFaceTexture(color, value, side = 'light') {
+  const key = color + ':' + value + ':' + side;
   if (faceCache.has(key)) return faceCache.get(key);
   const W = 300, H = 444;
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
@@ -49,7 +65,9 @@ function makeFaceTexture(color, value) {
   const pad = 15;
   if (color === 'wild') {
     roundRect(ctx, pad, pad, W - 2 * pad, H - 2 * pad, 22); ctx.save(); ctx.clip();
-    const q = [['red',0,0],['blue',1,0],['yellow',0,1],['green',1,1]];
+    const q = side === 'dark'
+      ? [['pink',0,0],['teal',1,0],['orange',0,1],['purple',1,1]]
+      : [['red',0,0],['blue',1,0],['yellow',0,1],['green',1,1]];
     for (const [c, cx, cy] of q) { ctx.fillStyle = HEX[c]; ctx.fillRect(cx*W/2, cy*H/2, W/2, H/2); }
     ctx.restore();
   } else {
@@ -64,11 +82,11 @@ function makeFaceTexture(color, value) {
   const sym = symbolFor(value);
   ctx.fillStyle = color === 'wild' ? '#1c1c1c' : HEX[color];
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `900 ${sym.length > 1 ? 116 : 184}px 'Segoe UI', system-ui, sans-serif`;
+  ctx.font = `900 ${symFont(sym.length)}px 'Segoe UI', system-ui, sans-serif`;
   ctx.fillText(sym, W/2, H/2 + 4);
 
   ctx.fillStyle = '#fff';
-  ctx.font = `900 ${sym.length > 1 ? 44 : 54}px 'Segoe UI', system-ui, sans-serif`;
+  ctx.font = `900 ${sym.length > 2 ? 32 : sym.length > 1 ? 44 : 54}px 'Segoe UI', system-ui, sans-serif`;
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
   ctx.fillText(sym, 26, 20);
   ctx.save(); ctx.translate(W - 26, H - 20); ctx.rotate(Math.PI);
@@ -90,21 +108,60 @@ function colourWheel(ctx, cx, cy, r) {
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
 }
 
-function makeBackTexture() {
-  if (backTex) return backTex;
+const backCache = new Map();
+function makeBackTexture(skin = activeSkin) {
+  if (backCache.has(skin)) return backCache.get(skin);
   const W = 300, H = 444;
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
-  ctx.fillStyle = '#efefef'; roundRect(ctx, 0, 0, W, H, 26); ctx.fill();
-  ctx.fillStyle = '#0c0c10'; roundRect(ctx, 10, 10, W-20, H-20, 19); ctx.fill();
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, 'rgba(255,255,255,0.07)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g; roundRect(ctx, 10, 10, W-20, H-20, 19); ctx.fill();
-  colourWheel(ctx, W/2, H/2, 54);
+
+  const border = skin === 'gold' ? '#e8c86a' : skin === 'neon' ? '#dcdcf5' : '#efefef';
+  ctx.fillStyle = border; roundRect(ctx, 0, 0, W, H, 26); ctx.fill();
+  ctx.fillStyle = skin === 'carbon' ? '#15151a' : '#0c0c10';
+  roundRect(ctx, 10, 10, W-20, H-20, 19); ctx.fill();
+
+  ctx.save();
+  roundRect(ctx, 10, 10, W-20, H-20, 19); ctx.clip();
+  if (skin === 'carbon') {
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 3;
+    for (let i = -H; i < W + H; i += 12) {
+      ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + H, H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(i + H, 0); ctx.lineTo(i, H); ctx.stroke();
+    }
+  } else if (skin === 'neon') {
+    ctx.strokeStyle = 'rgba(0,220,255,0.16)'; ctx.lineWidth = 2;
+    for (let x = 10; x < W; x += 24) { ctx.beginPath(); ctx.moveTo(x, 10); ctx.lineTo(x, H-10); ctx.stroke(); }
+    for (let y = 10; y < H; y += 24) { ctx.beginPath(); ctx.moveTo(10, y); ctx.lineTo(W-10, y); ctx.stroke(); }
+  } else if (skin === 'gold') {
+    const g = ctx.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, 'rgba(232,200,106,0.20)');
+    g.addColorStop(0.5, 'rgba(232,200,106,0.04)');
+    g.addColorStop(1, 'rgba(232,200,106,0.22)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  const sheen = ctx.createLinearGradient(0, 0, 0, H);
+  sheen.addColorStop(0, 'rgba(255,255,255,0.07)'); sheen.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sheen; ctx.fillRect(0, 0, W, H);
+  ctx.restore();
+
+  if (skin === 'neon') {
+    ctx.strokeStyle = '#22e0ff'; ctx.lineWidth = 7;
+    ctx.beginPath(); ctx.arc(W/2, H/2, 58, 0, Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = '#ff3ac0'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(W/2, H/2, 44, 0, Math.PI*2); ctx.stroke();
+  } else if (skin === 'gold') {
+    ctx.strokeStyle = '#e8c86a'; ctx.lineWidth = 8;
+    ctx.beginPath(); ctx.arc(W/2, H/2, 60, 0, Math.PI*2); ctx.stroke();
+    colourWheel(ctx, W/2, H/2, 42);
+  } else {
+    colourWheel(ctx, W/2, H/2, 54);
+  }
   colourWheel(ctx, 48, 46, 19);
-  backTex = new THREE.CanvasTexture(cv);
-  backTex.colorSpace = THREE.SRGBColorSpace; backTex.anisotropy = 8;
-  return backTex;
+
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  backCache.set(skin, t);
+  return t;
 }
 
 function makeUnoButtonTexture() {
@@ -123,23 +180,25 @@ function makeUnoButtonTexture() {
   return unoTex;
 }
 
-function makeFeltTexture() {
-  if (feltTex) return feltTex;
+const feltCache = new Map();
+function makeFeltTexture(base = '#24242f') {
+  if (feltCache.has(base)) return feltCache.get(base);
   const S = 512;
   const cv = document.createElement('canvas'); cv.width = S; cv.height = S;
   const ctx = cv.getContext('2d');
-  ctx.fillStyle = '#24242f'; ctx.fillRect(0,0,S,S);
+  ctx.fillStyle = base; ctx.fillRect(0,0,S,S);
   const img = ctx.getImageData(0,0,S,S); const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
     const n = (Math.random() - 0.5) * 26;
     d[i] += n; d[i+1] += n; d[i+2] += n;
   }
   ctx.putImageData(img, 0, 0);
-  feltTex = new THREE.CanvasTexture(cv);
-  feltTex.colorSpace = THREE.SRGBColorSpace;
-  feltTex.wrapS = feltTex.wrapT = THREE.RepeatWrapping;
-  feltTex.repeat.set(4, 3);
-  return feltTex;
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(4, 3);
+  feltCache.set(base, t);
+  return t;
 }
 
 let glowTex = null;
@@ -157,15 +216,24 @@ function makeGlowTexture() {
   return glowTex;
 }
 
-function makeLabelSprite(text) {
+function makeLabelSprite(text, glyph = '') {
   const cv = document.createElement('canvas'); cv.width = 300; cv.height = 68;
   const ctx = cv.getContext('2d');
   ctx.fillStyle = 'rgba(14,14,18,0.78)'; roundRect(ctx, 0, 0, 300, 68, 20); ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 2;
   roundRect(ctx, 1, 1, 298, 66, 20); ctx.stroke();
   ctx.fillStyle = '#f0eef8'; ctx.font = "800 30px 'Segoe UI', system-ui, sans-serif";
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(text, 150, 36);
+  ctx.textBaseline = 'middle';
+  if (glyph) {
+    ctx.textAlign = 'left';
+    ctx.font = "30px 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif";
+    ctx.fillText(glyph, 18, 36);
+    ctx.fillStyle = '#f0eef8'; ctx.font = "800 28px 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(text, 58, 36);
+  } else {
+    ctx.textAlign = 'center';
+    ctx.fillText(text, 150, 36);
+  }
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthTest: false }));
   sp.scale.set(2.5, 0.57, 1);
@@ -289,6 +357,7 @@ function punchWells(shape) {
 }
 
 const tableGroup = new THREE.Group(); scene.add(tableGroup);
+const themed = {};   // frame / rail / wood / bezel / felt materials
 const neonBars = {}, seatArrows = {}, seatRacks = {};
 
 function buildTable() {
@@ -297,8 +366,8 @@ function buildTable() {
     holedShape(FRAME_W, FRAME_D, FRAME_R, FELT_W + 0.2, FELT_D + 0.2, FELT_R + 0.1)), {
     depth: 0.72, bevelEnabled: true, bevelSize: 0.12, bevelThickness: 0.1, bevelSegments: 4, curveSegments: 28,
   });
-  const frame = new THREE.Mesh(frameGeo, new THREE.MeshStandardMaterial({
-    color: 0x3f3f4b, roughness: 0.46, metalness: 0.6 }));
+  themed.frame = new THREE.MeshStandardMaterial({ color: 0x3f3f4b, roughness: 0.46, metalness: 0.6 });
+  const frame = new THREE.Mesh(frameGeo, themed.frame);
   frame.rotation.x = -Math.PI/2; frame.position.y = -0.72;
   frame.receiveShadow = true; tableGroup.add(frame);
 
@@ -306,7 +375,7 @@ function buildTable() {
   const rail = new THREE.Mesh(
     new THREE.ShapeGeometry(punchWells(
       holedShape(RAIL_W, RAIL_D, RAIL_R, FELT_W + 0.2, FELT_D + 0.2, FELT_R + 0.1)), 28),
-    new THREE.MeshStandardMaterial({ color: 0x50505f, roughness: 0.38, metalness: 0.66 })
+    (themed.rail = new THREE.MeshStandardMaterial({ color: 0x50505f, roughness: 0.38, metalness: 0.66 }))
   );
   rail.rotation.x = -Math.PI/2; rail.position.y = RAIL_Y;
   rail.receiveShadow = true; tableGroup.add(rail);
@@ -315,22 +384,22 @@ function buildTable() {
   const woodGeo = new THREE.ExtrudeGeometry(
     holedShape(FELT_W + 3.0, FELT_D + 3.0, FELT_R + 1.5, FELT_W + 2.1, FELT_D + 2.1, FELT_R + 1.05),
     { depth: 0.1, bevelEnabled: false, curveSegments: 28 });
-  const wood = new THREE.Mesh(woodGeo, new THREE.MeshStandardMaterial({
-    color: 0x7a4820, roughness: 0.42, metalness: 0.25 }));
+  themed.wood = new THREE.MeshStandardMaterial({ color: 0x7a4820, roughness: 0.42, metalness: 0.25 });
+  const wood = new THREE.Mesh(woodGeo, themed.wood);
   wood.rotation.x = -Math.PI/2; wood.position.y = 0.03; tableGroup.add(wood);
 
   // dark bezel ringing the felt
   const bezelGeo = new THREE.ExtrudeGeometry(
     holedShape(FELT_W + 0.6, FELT_D + 0.6, FELT_R + 0.3, FELT_W, FELT_D, FELT_R),
     { depth: 0.16, bevelEnabled: false, curveSegments: 28 });
-  const bezel = new THREE.Mesh(bezelGeo, new THREE.MeshStandardMaterial({
-    color: 0x23232e, roughness: 0.55, metalness: 0.5 }));
+  themed.bezel = new THREE.MeshStandardMaterial({ color: 0x23232e, roughness: 0.55, metalness: 0.5 });
+  const bezel = new THREE.Mesh(bezelGeo, themed.bezel);
   bezel.rotation.x = -Math.PI/2; bezel.position.y = 0.02; tableGroup.add(bezel);
 
   // black felt
   const felt = new THREE.Mesh(
     new THREE.ShapeGeometry(roundedShape(FELT_W, FELT_D, FELT_R), 28),
-    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1.0, metalness: 0.0, map: makeFeltTexture() })
+    (themed.felt = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1.0, metalness: 0.0, map: makeFeltTexture() }))
   );
   felt.rotation.x = -Math.PI/2; felt.position.y = 0.008;
   felt.receiveShadow = true; tableGroup.add(felt);
@@ -461,13 +530,15 @@ let drawPileMeshes = [];
 function makeCard(card) {
   const g = new THREE.Group();
   g.rotation.order = 'YXZ';
-  const front = new THREE.Mesh(cardGeo, new THREE.MeshBasicMaterial({ map: makeFaceTexture(card.color, card.value) }));
+  const side = game ? game.side : 'light';
+  const f = face(card, side);
+  const front = new THREE.Mesh(cardGeo, new THREE.MeshBasicMaterial({ map: makeFaceTexture(f.color, f.value, side) }));
   front.position.z = 0.006;
   const back = new THREE.Mesh(cardGeo, new THREE.MeshBasicMaterial({ map: makeBackTexture() }));
   back.rotation.y = Math.PI; back.position.z = -0.006;
   front.castShadow = true; back.castShadow = true;
   g.add(front, back);
-  g.userData = { cardId: card.id };
+  g.userData = { cardId: card.id, card, front, back };
   cardsGroup.add(g);
   return g;
 }
@@ -535,9 +606,13 @@ const SEAT_POS = {
   left:   [-FELT_W/2 - 1.1, 0],
   right:  [ FELT_W/2 + 1.1, 0],
 };
-const GLOW_INT = { red: 0xff4a30, yellow: 0xffd42a, green: 0x2fd85f, blue: 0x3b86ff, wild: 0xf2f2ff };
-const GLOW_CSS = { red: '#ff6a52', yellow: '#ffdc4a', green: '#4ee07a', blue: '#5c9bff', wild: '#ffffff' };
-const POWER_VALUES = new Set(['skip', 'reverse', 'draw2', 'wild', 'wild4']);
+const GLOW_INT = { red: 0xff4a30, yellow: 0xffd42a, green: 0x2fd85f, blue: 0x3b86ff,
+                   pink: 0xff4aa8, teal: 0x24d6d6, orange: 0xff8a1e, purple: 0x9b5cff, wild: 0xf2f2ff };
+const GLOW_CSS = { red: '#ff6a52', yellow: '#ffdc4a', green: '#4ee07a', blue: '#5c9bff',
+                   pink: '#ff6bbb', teal: '#48e6e6', orange: '#ffa347', purple: '#b184ff', wild: '#ffffff' };
+const POWER_VALUES = new Set(['skip', 'reverse', 'draw2', 'wild', 'wild4',
+  'draw1', 'draw5', 'draw6', 'draw10', 'wild2', 'wild6', 'wild10', 'wildcolor',
+  'skipall', 'revdraw4', 'discardall', 'flip']);
 
 const fx = [];
 function spawnFx(mesh, dur, update, disposeMap = false) {
@@ -656,7 +731,7 @@ function colourCycle(finalInt) {
 
 // Fire the effect that matches the card just played.
 function powerFx(effect) {
-  const c = effect.card;
+  const c = effect.face;
   const int = GLOW_INT[c.color], css = GLOW_CSS[c.color];
   const at = p => SEAT_POS[relSeatOf(p)];
   switch (c.value) {
@@ -687,6 +762,31 @@ function powerFx(effect) {
       colourCycle(GLOW_INT[game.activeColor]);
       colourFan();
       break;
+    case 'flip':
+      popText(game.side === 'dark' ? 'DARK SIDE!' : 'LIGHT SIDE!', 0, 1.6,
+              game.side === 'dark' ? '#ff6bbb' : '#ffdc4a');
+      colourCycle(GLOW_INT[game.activeColor]);
+      reverseSwirl(GLOW_INT[game.activeColor]);
+      break;
+    case 'skipall':
+      popText('Skip Everyone!', 0, 1.6, css);
+      reverseSwirl(int);
+      break;
+    case 'discardall':
+      popText(`Dumped ${effect.discarded}!`, 0, 1.6, css);
+      ringBurst(DISC_POS.x, DISC_POS.z, int, { r1: 3.0 });
+      break;
+    case 'draw1': case 'draw5': case 'draw6': case 'draw10':
+    case 'wild2': case 'wild6': case 'wild10': case 'wildcolor':
+    case 'revdraw4': {
+      if (effect.drew == null) break;
+      const [dx, dz] = at(effect.drew);
+      popText(`+${effect.drewCount}`, dx, dz, css);
+      ringBurst(dx, dz, int, { r1: 3.2, soft: 0.9 });
+      shakeSeat(relSeatOf(effect.drew));
+      if (c.color === 'wild') { colourCycle(GLOW_INT[game.activeColor]); colourFan(); }
+      break;
+    }
   }
 }
 
@@ -764,6 +864,7 @@ function syncHands({ dur = 0.34, stagger = 0 } = {}) {
       }
     });
   }
+  collectOrphans();
 }
 
 // Lift the human's playable cards so they read as clickable.
@@ -778,7 +879,7 @@ function markPlayable() {
   game.hands[p].forEach((card, i) => {
     const mesh = cardMeshes.get(card.id);
     if (!mesh) return;
-    if (canPlay(card, game.top, game.activeColor)) {
+    if (game.canPlay(card)) {
       const tg = { ...targets[i] };
       tg.py += 0.4; tg.pz += 0.34;
       animate3(mesh, tg, { dur: 0.22 });
@@ -821,9 +922,91 @@ function refreshLabels() {
   if (!game) return;
   for (let p = 0; p < game.numPlayers; p++) {
     const [x, z] = SEAT_POS[relSeatOf(p)];
-    const sp = makeLabelSprite(`${game.playerName(p)}  ·  ${game.hands[p].length}`);
+    const out = game.eliminated.has(p);
+    const n = game.hands[p].length;
+    // No Mercy knocks you out at ELIMINATE_AT cards — warn before it happens
+    const risk = game.variant === 'nomercy' && !out && n >= ELIMINATE_AT - 6;
+    const txt = out ? `${game.playerName(p)}  ·  OUT`
+              : risk ? `${game.playerName(p)}  ·  ${n}/${ELIMINATE_AT} ⚠`
+              : `${game.playerName(p)}  ·  ${n}`;
+    const glyph = (p === viewPlayer() && !out) ? avatarGlyph() : '';
+    const sp = makeLabelSprite(txt, glyph);
     sp.position.set(x, 0.5, z);
     labelsGroup.add(sp);
+  }
+}
+
+function avatarGlyph() {
+  const a = Profile.AVATARS.find(x => x.id === profile.activeAvatar);
+  return a ? a.glyph : '';
+}
+
+/** Push the equipped theme onto the table materials. */
+function applyTheme() {
+  const t = Profile.THEMES.find(x => x.id === profile.activeTheme) || Profile.THEMES[0];
+  if (!themed.felt) return;
+  themed.frame.color.setHex(t.frame);
+  themed.rail.color.setHex(t.rail);
+  themed.wood.color.setHex(t.wood);
+  themed.bezel.color.setHex(t.bezel);
+  themed.felt.map = makeFeltTexture(t.felt);
+  themed.felt.needsUpdate = true;
+}
+
+/** Repoint every card back at the equipped skin. */
+function applySkin() {
+  activeSkin = profile.activeSkin;
+  const tex = makeBackTexture(activeSkin);
+  cardMeshes.forEach(m => { m.userData.back.material.map = tex; m.userData.back.material.needsUpdate = true; });
+  discardMeshes.forEach(m => { if (m.userData.back) { m.userData.back.material.map = tex; m.userData.back.material.needsUpdate = true; } });
+  drawPileMeshes.forEach(m => { m.material.map = tex; m.material.needsUpdate = true; });
+}
+
+function applyCosmetics() { applyTheme(); applySkin(); }
+
+/** After a Flip card, every card in play shows its other face. */
+function retextureAll() {
+  const side = game.side;
+  const paint = m => {
+    const c = m.userData.card;
+    if (!c) return;
+    const f = face(c, side);
+    m.userData.front.material.map = makeFaceTexture(f.color, f.value, side);
+    m.userData.front.material.needsUpdate = true;
+  };
+  cardMeshes.forEach(paint);
+  discardMeshes.forEach(paint);
+}
+
+/** Drop meshes for cards that left every hand (elimination, Discard All). */
+function collectOrphans() {
+  const live = new Set();
+  for (const hand of game.hands) for (const c of hand) live.add(c.id);
+  const inDiscard = new Set(discardMeshes.map(m => m.userData.cardId));
+  for (const [id, mesh] of [...cardMeshes]) {
+    if (live.has(id) || inDiscard.has(id)) continue;
+    for (let i = anims.length - 1; i >= 0; i--) if (anims[i].obj === mesh) anims.splice(i, 1);
+    cardMeshes.delete(id);
+    disposeCard(mesh);
+  }
+}
+
+/** Rebuild the wild-colour swatches for whichever side is up. */
+function buildColorSwatches() {
+  const grid = colorPick.querySelector('.grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  for (const c of game.palette()) {
+    const d = document.createElement('div');
+    d.className = 'swatch';
+    d.dataset.color = c;
+    d.style.background = HEX[c];
+    d.addEventListener('click', async () => {
+      colorPick.style.display = 'none';
+      const id = pendingWild; pendingWild = null;
+      if (id != null) await applyPlay(id, c);
+    });
+    grid.appendChild(d);
   }
 }
 
@@ -906,18 +1089,19 @@ async function applyPlay(cardId, color) {
   const effect = game.playCard(cardId, color);
   if (!effect) { busy = false; inputLocked = false; markPlayable(); return; }
 
-  const power = POWER_VALUES.has(effect.card.value);
+  const power = POWER_VALUES.has(effect.face.value);
   if (mesh) {
     cardMeshes.delete(cardId);
     placeDiscard(mesh, {
       spins: power ? 2 : 0,
       onLand: () => {
-        ringBurst(DISC_POS.x, DISC_POS.z, GLOW_INT[effect.card.color],
+        ringBurst(DISC_POS.x, DISC_POS.z, GLOW_INT[effect.face.color],
           power ? { r1: 2.2, dur: 0.7 } : { r1: 1.3, dur: 0.45, soft: 0.35 });
         if (power) powerFx(effect);
       },
     });
   }
+  if (effect.flipped) retextureAll();
   refreshLabels(); updateHUD();
   await sleep(power ? 460 : 300);
   syncHands({ stagger: 0.09 });          // penalty draws fly in
@@ -941,11 +1125,7 @@ async function applyDraw() {
   }
 }
 
-function botColorChoice(hand) {
-  const cnt = { red: 0, yellow: 0, green: 0, blue: 0 };
-  for (const c of hand) if (cnt[c.color] != null) cnt[c.color]++;
-  return COLORS.reduce((a, b) => (cnt[a] >= cnt[b] ? a : b));
-}
+
 
 async function botTurn() {
   if (!game || game.winner != null) return;
@@ -956,7 +1136,10 @@ async function botTurn() {
     syncHands({ stagger: 0.06 });
     refreshLabels(); updateHUD();
     await sleep(560);
-    if (r.playable) { await applyPlay(r.drew.id, r.drew.color === 'wild' ? botColorChoice(game.hands[game.current]) : null); }
+    if (r.playable) {
+      const wild = isWildValue(game.faceOf(r.drew).value);
+      await applyPlay(r.drew.id, wild ? bestColor(game, game.hands[game.current]) : null);
+    }
     else { await afterMove(); }
   } else {
     await applyPlay(choice.cardId, choice.color);
@@ -965,8 +1148,9 @@ async function botTurn() {
 
 async function humanPlay(cardId) {
   const card = game.hands[game.current].find(c => c.id === cardId);
-  if (!card || !canPlay(card, game.top, game.activeColor)) return;
-  if (card.color === 'wild') {
+  if (!card || !game.canPlay(card)) return;
+  if (isWildValue(game.faceOf(card).value)) {
+    buildColorSwatches();
     pendingWild = cardId; inputLocked = true; clickable = [];
     colorPick.style.display = 'flex';
     return;
@@ -1051,13 +1235,7 @@ renderer.domElement.addEventListener('pointerdown', async e => {
 let unoFlash = 0;
 function flashUno() { unoFlash = 1; }
 
-colorPick.querySelectorAll('.swatch').forEach(sw => {
-  sw.addEventListener('click', async () => {
-    colorPick.style.display = 'none';
-    const id = pendingWild; pendingWild = null;
-    await applyPlay(id, sw.dataset.color);
-  });
-});
+// wild-colour swatches are built per side by buildColorSwatches()
 
 el('drawBtn').addEventListener('click', () => applyDraw());
 el('passBtn').addEventListener('click', async () => {
@@ -1068,7 +1246,35 @@ el('menuBtn').addEventListener('click', backToMenu);
 el('againBtn').addEventListener('click', () => { winScreen.style.display = 'none'; startGame(); });
 
 // ── menu selection ──
-let selMode = 'ai', selCount = 3;
+let selMode = 'ai', selCount = 3, selVariant = 'classic';
+
+function refreshCoinHud() {
+  const txt = Profile.fmt(profile.coins);
+  for (const id of ['coinCount', 'coinCount2']) {
+    const c = el(id);
+    if (c) c.textContent = txt;
+  }
+}
+
+/** Paint the variant buttons, locking anything not yet bought. */
+function refreshVariantRow() {
+  const row = el('variantRow');
+  if (!row) return;
+  row.innerHTML = '';
+  for (const m of Profile.MODES) {
+    const owned = Profile.owns(profile, 'mode', m.id);
+    const b = document.createElement('button');
+    b.className = (m.id === selVariant ? 'sel' : '') + (owned ? '' : ' locked');
+    b.title = owned ? m.desc : `${m.desc}  —  ${Profile.fmt(m.price)} coins`;
+    b.textContent = owned ? m.name : `🔒 ${m.name}`;
+    b.addEventListener('click', () => {
+      if (!owned) { window.location.href = 'store.html'; return; }
+      selVariant = m.id;
+      refreshVariantRow();
+    });
+    row.appendChild(b);
+  }
+}
 el('modeRow').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
   el('modeRow').querySelectorAll('button').forEach(x => x.classList.remove('sel'));
   b.classList.add('sel'); selMode = b.dataset.mode;
@@ -1078,6 +1284,9 @@ el('countRow').querySelectorAll('button').forEach(b => b.addEventListener('click
   b.classList.add('sel'); selCount = parseInt(b.dataset.count, 10);
 }));
 el('startBtn').addEventListener('click', startGame);
+refreshCoinHud();
+refreshVariantRow();
+applyTheme();
 
 function clearBoard() {
   cardMeshes.forEach(m => disposeCard(m)); cardMeshes.clear();
@@ -1093,13 +1302,18 @@ function clearBoard() {
 
 async function startGame() {
   clearBoard();
-  game = new Game(selCount, selMode);
+  profile = Profile.load();            // pick up anything bought in the store
+  if (!Profile.owns(profile, 'mode', selVariant)) selVariant = 'classic';
+  game = new Game(selCount, selMode, selVariant);
   turnOwner = game.current; drawnThisTurn = false; pendingWild = null;
   menu.style.display = 'none'; winScreen.style.display = 'none';
   hud.style.display = 'flex'; controls.classList.remove('hidden');
   const hl = el('homeLink'); if (hl) hl.style.display = 'block';
+  const gw = el('gameWallet'); if (gw) gw.style.display = 'inline-flex';
   buildDrawPile();
+  applyCosmetics();
   applySeatVisibility();
+  refreshCoinHud();
   refreshLabels(); refreshSeatGlow(); updateHUD();
   await dealAnimation();
   await afterMove();
@@ -1109,13 +1323,26 @@ function backToMenu() {
   game = null; inputLocked = true; busy = false; clickable = [];
   hud.style.display = 'none'; controls.classList.add('hidden'); winScreen.style.display = 'none';
   const hl = el('homeLink'); if (hl) hl.style.display = 'none';
+  const gw = el('gameWallet'); if (gw) gw.style.display = 'none';
   clearBoard();
+  profile = Profile.load();
+  refreshCoinHud(); refreshVariantRow();
   menu.style.display = 'flex';
 }
 
 function showWin() {
   inputLocked = true; clickable = [];
-  el('winText').textContent = game.playerName(game.winner) + ' wins!';
+  const won = humanControlled(game.winner) && (game.mode === 'hotseat' || game.winner === 0);
+  const cardsLeft = game.hands[game.mode === 'hotseat' ? game.winner : 0].length;
+  const reward = Profile.awardForResult(profile, {
+    won, numPlayers: game.numPlayers, variant: game.variant, cardsLeft,
+  });
+  const wn = game.playerName(game.winner);
+  el('winText').textContent = wn === 'You' ? 'You win!' : `${wn} wins!`;
+  const r = el('winReward');
+  if (r) r.innerHTML = `<span class="coin">🪙</span> +${Profile.fmt(reward)} coins` +
+    `<span class="sub">Balance ${Profile.fmt(profile.coins)}</span>`;
+  refreshCoinHud();
   winScreen.style.display = 'flex';
 }
 
@@ -1167,5 +1394,3 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   fitCamera();
 });
-
-

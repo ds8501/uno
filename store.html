@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UNO — Store</title>
+<style>
+  :root {
+    --red:#e02216; --yellow:#f5c400; --blue:#1a5dc8; --green:#1e8c45;
+    --dark:#0e0e12; --dark2:#161620; --card-bg:#1c1c28;
+    --text:#f0eef8; --muted:#8e8ca8; --radius:18px;
+  }
+  *,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--dark); color:var(--text); font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif; line-height:1.6; min-height:100vh; }
+  a { color:inherit; }
+
+  nav { position:sticky; top:0; z-index:50; display:flex; align-items:center; justify-content:space-between;
+        padding:0 5vw; height:68px; background:rgba(14,14,18,0.92); backdrop-filter:blur(14px);
+        border-bottom:1px solid rgba(255,255,255,0.06); }
+  .nav-logo { display:flex; align-items:center; gap:10px; text-decoration:none; font-size:1.45rem; font-weight:900; }
+  .logo-badge { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px;
+                border-radius:10px; background:var(--red); color:#fff; font-size:1.05rem; font-weight:900;
+                box-shadow:0 0 18px rgba(224,34,22,0.6); transform:rotate(-6deg); }
+  .accent { color:var(--yellow); }
+  .nav-right { display:flex; align-items:center; gap:12px; }
+  .chip { display:inline-flex; align-items:center; gap:8px; padding:8px 16px; border-radius:50px;
+          font-weight:800; font-size:0.88rem; text-decoration:none;
+          background:rgba(245,196,0,0.12); border:1px solid rgba(245,196,0,0.32); color:var(--yellow); }
+  .chip.ghost { background:rgba(255,255,255,0.07); border-color:rgba(255,255,255,0.16); color:var(--text); }
+  .chip.ghost:hover { background:rgba(255,255,255,0.13); }
+
+  main { max-width:1150px; margin:0 auto; padding:44px 5vw 90px; }
+  h1 { font-size:clamp(1.9rem,3.6vw,2.7rem); font-weight:900; letter-spacing:-1px; }
+  .sub { color:var(--muted); margin-bottom:8px; }
+  .note { font-size:0.8rem; color:var(--muted); background:rgba(255,255,255,0.04);
+          border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:10px 16px; margin:18px 0 0; }
+
+  .lbl { display:block; font-size:0.72rem; font-weight:800; letter-spacing:0.14em; text-transform:uppercase;
+         color:var(--yellow); margin:44px 0 14px; }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(232px,1fr)); gap:16px; }
+  .item { background:var(--card-bg); border:1px solid rgba(255,255,255,0.07); border-radius:var(--radius);
+          padding:18px; display:flex; flex-direction:column; gap:10px; }
+  .item h3 { font-size:1rem; font-weight:800; }
+  .item p { font-size:0.82rem; color:var(--muted); flex:1; }
+  .swatchbar { display:flex; gap:6px; }
+  .swatchbar span { width:100%; height:34px; border-radius:8px; }
+  .preview { height:78px; border-radius:12px; border:1px solid rgba(255,255,255,0.1); }
+
+  button { cursor:pointer; border:none; border-radius:50px; padding:10px 18px; font-size:0.88rem; font-weight:800;
+           background:var(--red); color:#fff; transition:transform .12s, filter .18s, background .18s; }
+  button:hover:not(:disabled) { transform:translateY(-2px); filter:brightness(1.08); }
+  button.owned { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.16); color:var(--muted); }
+  button.equip { background:var(--blue); }
+  button.equipped { background:rgba(30,140,69,0.22); border:1px solid rgba(30,140,69,0.5); color:#67d98d; }
+  button:disabled { cursor:not-allowed; }
+  button:disabled:not(.owned):not(.equipped) {
+    background:rgba(255,255,255,0.06); color:var(--muted);
+    border:1px solid rgba(255,255,255,0.12); box-shadow:none;
+  }
+  .price { font-weight:900; color:var(--yellow); font-size:0.9rem; }
+
+  .toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(24px);
+           background:var(--card-bg); border:1px solid rgba(255,255,255,0.14); border-radius:50px;
+           padding:12px 24px; font-weight:700; box-shadow:0 18px 50px rgba(0,0,0,0.6);
+           opacity:0; transition:opacity .2s, transform .2s; z-index:80; pointer-events:none; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  .toast.bad { border-color:rgba(224,34,22,0.6); color:#ff8a7a; }
+</style>
+</head>
+<body>
+<nav>
+  <a href="index.html" class="nav-logo"><span class="logo-badge">U</span> UN<span class="accent">O</span></a>
+  <div class="nav-right">
+    <span class="chip">🪙 <span id="coins">0</span></span>
+    <a class="chip ghost" href="game.html">Play</a>
+    <a class="chip ghost" href="index.html">Home</a>
+  </div>
+</nav>
+
+<main>
+  <h1>Store</h1>
+  <p class="sub">Win rounds to earn coins, then spend them on modes and cosmetics.</p>
+  <div class="note" id="statsNote"></div>
+  <div class="note">
+    <strong>Demo economy.</strong> Coin top-ups below are simulated for this prototype — no real payment
+    is taken and no card details are collected. Balances are stored locally in your browser.
+  </div>
+
+  <span class="lbl">Get coins</span>
+  <div class="grid" id="bundles"></div>
+
+  <span class="lbl">Game modes</span>
+  <div class="grid" id="modes"></div>
+
+  <span class="lbl">Card backs</span>
+  <div class="grid" id="skins"></div>
+
+  <span class="lbl">Table themes</span>
+  <div class="grid" id="themes"></div>
+
+  <span class="lbl">Avatars</span>
+  <div class="grid" id="avatars"></div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import * as P from './js/profile.js';
+
+let profile = P.load();
+const $ = id => document.getElementById(id);
+
+let toastTimer = null;
+function toast(msg, bad = false) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (bad ? ' bad' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = 'toast'; }, 2200);
+}
+
+const SKIN_CSS = {
+  classic: 'background:#0c0c10;',
+  carbon:  'background:repeating-linear-gradient(45deg,#15151a 0 6px,#1e1e25 6px 12px);',
+  neon:    'background:#0c0c10; box-shadow:inset 0 0 26px rgba(34,224,255,0.5);',
+  gold:    'background:linear-gradient(135deg,#0c0c10,#3a2f12,#0c0c10); border-color:#e8c86a;',
+};
+
+function render() {
+  $('coins').textContent = P.fmt(profile.coins);
+  const s = profile.stats;
+  $('statsNote').innerHTML =
+    `<strong>${s.won}</strong> wins from <strong>${s.played}</strong> rounds · ` +
+    `<strong>${P.fmt(s.earned)}</strong> coins earned all-time`;
+
+  // coin bundles (simulated purchase)
+  $('bundles').innerHTML = '';
+  for (const b of P.COIN_BUNDLES) {
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.innerHTML = `<h3>🪙 ${P.fmt(b.coins)} coins</h3>
+      <p>${b.tag ? b.tag : 'Top up your balance.'}</p>
+      <div class="price">${b.price}</div>`;
+    const btn = document.createElement('button');
+    btn.textContent = 'Buy (demo)';
+    btn.onclick = () => {
+      if (!confirm(`Simulated purchase — no real payment will be taken.\n\nAdd ${P.fmt(b.coins)} coins for ${b.price}?`)) return;
+      const r = P.redeemBundle(profile, b.id);
+      if (r.ok) { toast(`Added ${P.fmt(r.coins)} coins`); render(); }
+    };
+    el.appendChild(btn);
+    $('bundles').appendChild(el);
+  }
+
+  renderSection('modes', 'mode', P.MODES, m => `<p>${m.desc}</p>`);
+  renderSection('skins', 'skin', P.SKINS,
+    sk => `<div class="preview" style="${SKIN_CSS[sk.id] || ''}"></div><p>${sk.desc}</p>`);
+  renderSection('themes', 'theme', P.THEMES, t =>
+    `<div class="swatchbar">
+       <span style="background:${t.felt}"></span>
+       <span style="background:#${t.rail.toString(16).padStart(6, '0')}"></span>
+       <span style="background:#${t.wood.toString(16).padStart(6, '0')}"></span>
+     </div><p>Felt, rail and trim colours.</p>`);
+  renderSection('avatars', 'avatar', P.AVATARS, a =>
+    `<div class="preview" style="display:flex;align-items:center;justify-content:center;font-size:2.4rem;">${a.glyph || '—'}</div>`);
+}
+
+const activeId = kind =>
+  kind === 'skin' ? profile.activeSkin :
+  kind === 'theme' ? profile.activeTheme :
+  kind === 'avatar' ? profile.activeAvatar : null;
+
+function renderSection(hostId, kind, items, body) {
+  const host = $(hostId);
+  host.innerHTML = '';
+  for (const item of items) {
+    const owned = P.owns(profile, kind, item.id);
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.innerHTML = `<h3>${item.name}</h3>${body(item)}` +
+      (owned ? '' : `<div class="price">🪙 ${P.fmt(item.price)}</div>`);
+
+    const btn = document.createElement('button');
+    if (!owned) {
+      btn.textContent = 'Buy';
+      btn.disabled = profile.coins < item.price;
+      if (btn.disabled) btn.title = 'Not enough coins';
+      btn.onclick = () => {
+        const r = P.buy(profile, kind, item.id);
+        if (!r.ok) return toast(r.reason, true);
+        toast(`Unlocked ${item.name}`);
+        if (kind !== 'mode') P.equip(profile, kind, item.id);
+        render();
+      };
+    } else if (kind === 'mode') {
+      btn.className = 'owned'; btn.textContent = 'Owned'; btn.disabled = true;
+    } else if (activeId(kind) === item.id) {
+      btn.className = 'equipped'; btn.textContent = '✓ Equipped'; btn.disabled = true;
+    } else {
+      btn.className = 'equip'; btn.textContent = 'Equip';
+      btn.onclick = () => { P.equip(profile, kind, item.id); toast(`${item.name} equipped`); render(); };
+    }
+    el.appendChild(btn);
+    host.appendChild(el);
+  }
+}
+
+render();
+</script>
+</body>
+</html>
