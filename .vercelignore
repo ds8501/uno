@@ -1,0 +1,10 @@
+.git
+.idea
+node_modules
+*.pptx
+~$*
+src
+package.json
+package-lock.json
+vite.config.js
+README.md

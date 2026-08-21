@@ -178,6 +178,44 @@
   #menuWallet .shop { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.16); color: var(--text); }
   #gameWallet { position: fixed; top: 74px; right: 22px; z-index: 6; }
 
+  /* ── room lobby ── */
+  #lobby .panel { min-width: 400px; max-width: 460px; }
+  .roomcode {
+    font-size: 2.5rem; font-weight: 900; letter-spacing: 0.28em;
+    color: var(--yellow); margin: 6px 0 2px; text-indent: 0.28em;
+  }
+  .linkrow { display: flex; gap: 8px; margin-top: 12px; }
+  .linkrow input {
+    flex: 1; min-width: 0; background: rgba(0,0,0,0.42); color: var(--muted);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 50px;
+    padding: 10px 16px; font-size: 0.78rem; font-family: inherit;
+  }
+  .seatlist { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .seatrow {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 12px; padding: 10px 14px; font-size: 0.9rem; font-weight: 700;
+  }
+  .seatrow .tag {
+    margin-left: auto; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .seatrow.host .tag { color: var(--yellow); }
+  .seatrow.empty { opacity: 0.45; border-style: dashed; }
+  .seatdot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .seatrow.empty .seatdot, .seatrow.botseat .seatdot { background: var(--muted); box-shadow: none; }
+  .nameinput, .codeinput {
+    width: 100%; background: rgba(0,0,0,0.35); color: var(--text);
+    border: 1px solid rgba(255,255,255,0.14); border-radius: 50px;
+    padding: 12px 20px; font-size: 0.95rem; font-family: inherit; text-align: center;
+  }
+  .codeinput { letter-spacing: 0.3em; text-transform: uppercase; font-weight: 800; }
+  .err { color: #ff8a7a; font-size: 0.82rem; min-height: 1.1em; margin-top: 10px; }
+  .waiting { color: var(--muted); font-size: 0.82rem; margin-top: 12px; }
+  .backlink { display: block; margin-top: 16px; color: var(--muted); font-size: 0.8rem;
+              text-decoration: none; cursor: pointer; }
+  .backlink:hover { color: var(--text); }
+
   #variantRow button.locked { opacity: 0.62; }
   #variantRow button.locked:hover { opacity: 0.85; }
   #variantRow { gap: 8px; }
@@ -212,6 +250,7 @@
     <div class="row" id="modeRow">
       <button data-mode="ai" class="sel">You vs Bots</button>
       <button data-mode="hotseat">Local Hotseat</button>
+      <button data-mode="online">Play with Friends</button>
     </div>
 
     <span class="lbl">Players</span>
@@ -222,6 +261,52 @@
     </div>
 
     <button class="primary" id="startBtn">Start Game</button>
+  </div>
+</div>
+
+<!-- Room lobby -->
+<div class="overlay" id="lobby" style="display:none;">
+  <div class="panel">
+    <div class="brand" style="font-size:1.8rem;margin-bottom:0.8rem;">
+      <span class="logo-badge" style="width:40px;height:40px;font-size:1.2rem;">U</span>
+      <span>UN<span class="accent">O</span></span>
+    </div>
+
+    <!-- step 1: pick create or join -->
+    <div id="lobbyStart">
+      <span class="lbl" style="margin-top:6px;">Your name</span>
+      <input class="nameinput" id="playerName" maxlength="14" placeholder="Enter a name" />
+      <button class="primary" id="createBtn" style="margin-top:20px;">Create Room</button>
+      <span class="lbl">or join one</span>
+      <input class="codeinput" id="joinCode" maxlength="4" placeholder="CODE" />
+      <button id="joinBtn" style="margin-top:12px;">Join Room</button>
+      <div class="err" id="lobbyErr"></div>
+      <a class="backlink" id="lobbyBack">← Back to menu</a>
+    </div>
+
+    <!-- step 2: the room -->
+    <div id="lobbyRoom" style="display:none;">
+      <span class="lbl" style="margin-top:0;">Room code</span>
+      <div class="roomcode" id="roomCode">----</div>
+      <div class="linkrow">
+        <input id="roomLink" readonly />
+        <button id="copyBtn">Copy</button>
+      </div>
+
+      <span class="lbl">Players</span>
+      <div class="seatlist" id="seatList"></div>
+
+      <div id="hostControls" style="display:none;">
+        <span class="lbl">Game</span>
+        <div class="row" id="lobbyVariantRow"></div>
+        <span class="lbl">Seats</span>
+        <div class="row" id="lobbySeatsRow"></div>
+        <button class="primary" id="startRoomBtn">Start Game</button>
+        <div class="waiting">Empty seats become bots.</div>
+      </div>
+      <div id="guestWaiting" class="waiting" style="display:none;">Waiting for the host to start…</div>
+      <a class="backlink" id="leaveBtn">← Leave room</a>
+    </div>
   </div>
 </div>
 

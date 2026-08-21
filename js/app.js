@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { Game, botChoose, face, bestColor, isWildValue, ELIMINATE_AT } from './uno.js';
 import * as Profile from './profile.js';
+import * as Net from './net.js';
+import { makeView } from './view.js';
 
 // ═══════════════════════════════════════════════════════════
 //  PALETTE
@@ -532,7 +534,8 @@ function makeCard(card) {
   g.rotation.order = 'YXZ';
   const side = game ? game.side : 'light';
   const f = face(card, side);
-  const front = new THREE.Mesh(cardGeo, new THREE.MeshBasicMaterial({ map: makeFaceTexture(f.color, f.value, side) }));
+  const frontMap = card.hidden ? makeBackTexture() : makeFaceTexture(f.color, f.value, side);
+  const front = new THREE.Mesh(cardGeo, new THREE.MeshBasicMaterial({ map: frontMap }));
   front.position.z = 0.006;
   const back = new THREE.Mesh(cardGeo, new THREE.MeshBasicMaterial({ map: makeBackTexture() }));
   back.rotation.y = Math.PI; back.position.z = -0.006;
@@ -805,8 +808,10 @@ const el = id => document.getElementById(id);
 const menu = el('menu'), hud = el('hud'), controls = el('controls');
 const winScreen = el('winScreen'), colorPick = el('colorPick');
 
-const humanControlled = p => game.mode === 'hotseat' ? true : p === 0;
-const viewPlayer = () => game.mode === 'hotseat' ? game.current : 0;
+const isOnline = () => !!(game && game.online);
+const humanControlled = p =>
+  game.online ? p === game.you : game.mode === 'hotseat' ? true : p === 0;
+const viewPlayer = () => game.online ? game.you : (game.mode === 'hotseat' ? game.current : 0);
 
 const SEAT_ORDER = { 2: ['bottom','top'], 3: ['bottom','left','right'], 4: ['bottom','left','top','right'] };
 function relSeatOf(p) {
@@ -969,7 +974,7 @@ function retextureAll() {
   const side = game.side;
   const paint = m => {
     const c = m.userData.card;
-    if (!c) return;
+    if (!c || c.hidden) return;
     const f = face(c, side);
     m.userData.front.material.map = makeFaceTexture(f.color, f.value, side);
     m.userData.front.material.needsUpdate = true;
@@ -1075,6 +1080,8 @@ async function afterMove() {
   busy = false;
   if (humanControlled(game.current)) {
     inputLocked = false; markPlayable(); updateHUD();
+  } else if (isOnline()) {
+    inputLocked = true; markPlayable(); updateHUD();   // server drives the others
   } else {
     inputLocked = true; markPlayable(); updateHUD();
     await sleep(700);
@@ -1083,15 +1090,25 @@ async function afterMove() {
 }
 
 async function applyPlay(cardId, color) {
+  if (isOnline()) {
+    busy = true; inputLocked = true; clickable = [];
+    Net.playCard(cardId, color);
+    return;                                   // resolves when the server replies
+  }
   busy = true; inputLocked = true; clickable = [];
   const mesh = cardMeshes.get(cardId);
   const before = game.current;
   const effect = game.playCard(cardId, color);
   if (!effect) { busy = false; inputLocked = false; markPlayable(); return; }
 
+  await animateMove(effect, mesh);
+}
+
+/** Animate one resolved move. Shared by local play and server echoes. */
+async function animateMove(effect, mesh) {
   const power = POWER_VALUES.has(effect.face.value);
   if (mesh) {
-    cardMeshes.delete(cardId);
+    cardMeshes.delete(effect.card.id);
     placeDiscard(mesh, {
       spins: power ? 2 : 0,
       onLand: () => {
@@ -1111,6 +1128,11 @@ async function applyPlay(cardId, color) {
 
 async function applyDraw() {
   if (drawnThisTurn || busy) return;
+  if (isOnline()) {
+    busy = true; inputLocked = true; clickable = [];
+    Net.drawCard();
+    return;
+  }
   busy = true; inputLocked = true; clickable = [];
   const r = game.drawTurn();
   drawnThisTurn = true;
@@ -1240,10 +1262,15 @@ function flashUno() { unoFlash = 1; }
 el('drawBtn').addEventListener('click', () => applyDraw());
 el('passBtn').addEventListener('click', async () => {
   if (busy) return;
+  if (isOnline()) { busy = true; inputLocked = true; Net.passTurn(); return; }
   drawnThisTurn = false; game.passTurn(); await afterMove();
 });
 el('menuBtn').addEventListener('click', backToMenu);
-el('againBtn').addEventListener('click', () => { winScreen.style.display = 'none'; startGame(); });
+el('againBtn').addEventListener('click', () => {
+  winScreen.style.display = 'none';
+  if (isOnline()) { if (isHost) Net.startRoom(); else showLobby('room'); return; }
+  startGame();
+});
 
 // ── menu selection ──
 let selMode = 'ai', selCount = 3, selVariant = 'classic';
@@ -1276,6 +1303,7 @@ function refreshVariantRow() {
   }
 }
 el('modeRow').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.mode === 'online') { openRoomFlow(); return; }
   el('modeRow').querySelectorAll('button').forEach(x => x.classList.remove('sel'));
   b.classList.add('sel'); selMode = b.dataset.mode;
 }));
@@ -1287,6 +1315,199 @@ el('startBtn').addEventListener('click', startGame);
 refreshCoinHud();
 refreshVariantRow();
 applyTheme();
+
+// arriving from a shared link: prefill the code and join once a name is set
+const invite = new URLSearchParams(location.search).get('room');
+if (invite) {
+  openRoomFlow(invite.toUpperCase().slice(0, 4)).then(() => {
+    if (savedName()) el('joinBtn').click();     // returning player, just join
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ONLINE ROOMS
+// ═══════════════════════════════════════════════════════════
+const lobby = el('lobby');
+let roomCode = null, isHost = false, mySeat = 0;
+let lobbySeats = 2, lobbyVariant = 'classic';
+
+const lobbyError = msg => { el('lobbyErr').textContent = msg || ''; };
+
+function showLobby(step) {
+  menu.style.display = 'none';
+  lobby.style.display = 'flex';
+  el('lobbyStart').style.display = step === 'start' ? 'block' : 'none';
+  el('lobbyRoom').style.display  = step === 'room'  ? 'block' : 'none';
+}
+
+function hideLobby() { lobby.style.display = 'none'; }
+
+function savedName() {
+  return localStorage.getItem('uno.name') || '';
+}
+
+async function openRoomFlow(prefillCode = '') {
+  lobbyError('');
+  el('playerName').value = savedName();
+  el('joinCode').value = prefillCode;
+  showLobby('start');
+  try { await Net.connect(); }
+  catch { lobbyError('Room server unreachable — start it with: npm start'); }
+}
+
+function myName() {
+  const n = el('playerName').value.trim().slice(0, 14) || 'Player';
+  localStorage.setItem('uno.name', n);
+  return n;
+}
+
+function renderLobbyRoom(m) {
+  roomCode = m.code; isHost = m.isHost; mySeat = m.you;
+  el('roomCode').textContent = m.code;
+  const link = `${location.origin}${location.pathname}?room=${m.code}`;
+  el('roomLink').value = link;
+
+  const list = el('seatList');
+  list.innerHTML = '';
+  const total = Math.max(m.seats.length, lobbySeats);
+  for (let i = 0; i < total; i++) {
+    const s = m.seats[i];
+    const row = document.createElement('div');
+    if (!s) {
+      row.className = 'seatrow empty';
+      row.innerHTML = `<span class="seatdot"></span><span>Open seat</span><span class="tag">bot if empty</span>`;
+    } else {
+      row.className = 'seatrow' + (i === 0 ? ' host' : '') + (s.bot ? ' botseat' : '');
+      const tag = i === 0 ? 'Host' : s.bot ? 'Bot' : (i === m.you ? 'You' : 'Ready');
+      row.innerHTML = `<span class="seatdot"></span><span>${s.name}</span><span class="tag">${tag}</span>`;
+    }
+    list.appendChild(row);
+  }
+
+  el('hostControls').style.display  = m.isHost ? 'block' : 'none';
+  el('guestWaiting').style.display  = m.isHost ? 'none'  : 'block';
+  if (m.isHost) { lobbyVariant = m.variant; renderLobbyPickers(); }
+}
+
+function renderLobbyPickers() {
+  const vr = el('lobbyVariantRow');
+  vr.innerHTML = '';
+  for (const mode of Profile.MODES) {
+    const owned = Profile.owns(profile, 'mode', mode.id);
+    const b = document.createElement('button');
+    b.className = (mode.id === lobbyVariant ? 'sel' : '') + (owned ? '' : ' locked');
+    b.textContent = owned ? mode.name : `🔒 ${mode.name}`;
+    b.style.fontSize = '0.82rem'; b.style.padding = '9px 14px';
+    b.onclick = () => {
+      if (!owned) { window.location.href = 'store.html'; return; }
+      lobbyVariant = mode.id; Net.setVariant(mode.id); renderLobbyPickers();
+    };
+    vr.appendChild(b);
+  }
+  const sr = el('lobbySeatsRow');
+  sr.innerHTML = '';
+  for (const n of [2, 3, 4]) {
+    const b = document.createElement('button');
+    b.className = n === lobbySeats ? 'sel' : '';
+    b.textContent = n; b.style.minWidth = '52px';
+    b.onclick = () => { lobbySeats = n; Net.setSeats(n); renderLobbyPickers(); };
+    sr.appendChild(b);
+  }
+}
+
+/** Swap the local game for a fresh server snapshot. */
+function adoptSnapshot(snap) {
+  game = makeView(snap);
+  return game;
+}
+
+async function beginOnlineGame(snap) {
+  hideLobby();
+  clearBoard();
+  profile = Profile.load();
+  adoptSnapshot(snap);
+  turnOwner = game.current; drawnThisTurn = false; pendingWild = null;
+  menu.style.display = 'none'; winScreen.style.display = 'none';
+  hud.style.display = 'flex'; controls.classList.remove('hidden');
+  const hl = el('homeLink'); if (hl) hl.style.display = 'block';
+  const gw = el('gameWallet'); if (gw) gw.style.display = 'inline-flex';
+  buildDrawPile();
+  applyCosmetics();
+  applySeatVisibility();
+  refreshCoinHud();
+  refreshLabels(); refreshSeatGlow(); updateHUD();
+  await dealAnimation();
+  await afterMove();
+}
+
+// ── server events ──
+Net.on('lobby', m => { lobbySeats = Math.max(lobbySeats, m.seats.length); renderLobbyRoom(m); showLobby('room'); });
+Net.on('error', m => lobbyError(m.msg));
+Net.on('close', () => { if (isOnline()) el('hint').textContent = 'Disconnected from the room server.'; });
+
+Net.on('started', async m => { await beginOnlineGame(m.snapshot); });
+
+Net.on('moved', async m => {
+  if (!isOnline()) return;
+  const effect = m.effect;
+  if (!effect) { adoptSnapshot(m.snapshot); refreshLabels(); updateHUD(); return; }
+  const mesh = cardMeshes.get(effect.card.id);
+  adoptSnapshot(m.snapshot);
+  if (mesh) {
+    // an opponent's card arrives face-down and opaque; give it its real face
+    // it arrived face-down and opaque, so give it its real face before it flies
+    mesh.userData.card = effect.card;
+    const f = face(effect.card, game.side);
+    mesh.userData.front.material.map = makeFaceTexture(f.color, f.value, game.side);
+    mesh.userData.front.material.needsUpdate = true;
+    cardMeshes.delete(effect.card.id);
+  }
+  await animateMove(effect, mesh);
+});
+
+Net.on('drew', async m => {
+  if (!isOnline()) return;
+  adoptSnapshot(m.snapshot);
+  drawnThisTurn = game.current === game.you && !!(m.effect && m.effect.playable);
+  syncHands({ stagger: 0.06 });
+  refreshLabels(); updateHUD();
+  await sleep(520);
+  if (m.effect && m.effect.playable && game.current === game.you) {
+    busy = false; inputLocked = false; markPlayable(); updateHUD();
+  } else {
+    await afterMove();
+  }
+});
+
+Net.on('passed', async m => { if (!isOnline()) return; adoptSnapshot(m.snapshot); drawnThisTurn = false; await afterMove(); });
+Net.on('ended', async m => { if (!isOnline()) return; adoptSnapshot(m.snapshot); await afterMove(); });
+
+// ── lobby controls ──
+el('createBtn').addEventListener('click', async () => {
+  lobbyError('');
+  try { await Net.connect(); } catch { return lobbyError('Room server unreachable — start it with: npm start'); }
+  Net.createRoom(myName(), lobbyVariant, lobbySeats);
+});
+el('joinBtn').addEventListener('click', async () => {
+  const code = el('joinCode').value.trim().toUpperCase();
+  if (code.length !== 4) return lobbyError('Enter the 4-character room code');
+  lobbyError('');
+  try { await Net.connect(); } catch { return lobbyError('Room server unreachable — start it with: npm start'); }
+  Net.joinRoom(code, myName());
+});
+el('startRoomBtn').addEventListener('click', () => Net.startRoom());
+el('copyBtn').addEventListener('click', async () => {
+  const link = el('roomLink').value;
+  try { await navigator.clipboard.writeText(link); el('copyBtn').textContent = 'Copied!'; }
+  catch { el('roomLink').select(); el('copyBtn').textContent = 'Select + copy'; }
+  setTimeout(() => { el('copyBtn').textContent = 'Copy'; }, 1600);
+});
+el('lobbyBack').addEventListener('click', () => { hideLobby(); Net.close(); menu.style.display = 'flex'; });
+el('leaveBtn').addEventListener('click', () => {
+  Net.close(); roomCode = null; hideLobby();
+  history.replaceState(null, '', location.pathname);
+  menu.style.display = 'flex';
+});
 
 function clearBoard() {
   cardMeshes.forEach(m => disposeCard(m)); cardMeshes.clear();
@@ -1301,6 +1522,7 @@ function clearBoard() {
 }
 
 async function startGame() {
+  if (selMode === 'online') { openRoomFlow(); return; }
   clearBoard();
   profile = Profile.load();            // pick up anything bought in the store
   if (!Profile.owns(profile, 'mode', selVariant)) selVariant = 'classic';
@@ -1320,6 +1542,7 @@ async function startGame() {
 }
 
 function backToMenu() {
+  if (isOnline()) { Net.close(); roomCode = null; history.replaceState(null, '', location.pathname); }
   game = null; inputLocked = true; busy = false; clickable = [];
   hud.style.display = 'none'; controls.classList.add('hidden'); winScreen.style.display = 'none';
   const hl = el('homeLink'); if (hl) hl.style.display = 'none';
@@ -1332,8 +1555,11 @@ function backToMenu() {
 
 function showWin() {
   inputLocked = true; clickable = [];
-  const won = humanControlled(game.winner) && (game.mode === 'hotseat' || game.winner === 0);
-  const cardsLeft = game.hands[game.mode === 'hotseat' ? game.winner : 0].length;
+  const me = viewPlayer();
+  const won = game.online ? game.winner === game.you
+            : game.mode === 'hotseat' ? true
+            : game.winner === 0;
+  const cardsLeft = (game.hands[me] || []).length;
   const reward = Profile.awardForResult(profile, {
     won, numPlayers: game.numPlayers, variant: game.variant, cardsLeft,
   });
